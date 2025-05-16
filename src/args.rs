@@ -7,7 +7,8 @@ pub struct AppArgs {
     pub table_name: String,
     pub column_count: i32,
     pub encoding: Option<String>,
-    pub delimiter: Option<char>,
+    pub delimiter: Option<u8>,
+    pub database_type: String,
     pub drop_existing: bool,
     pub batch_size: Option<u32>,
     pub threads: u32,
@@ -15,7 +16,7 @@ pub struct AppArgs {
 
 pub fn parse_args() -> AppArgs {
     let matches = Command::new("parseqlite")
-        .version("0.0.1")
+        .version("0.0.2")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -38,7 +39,7 @@ pub fn parse_args() -> AppArgs {
         )
         .arg(
             Arg::new("table_name")
-                .short('t')
+                .short('T')
                 .long("table-name")
                 .value_name("TABLE_NAME")
                 .help("Specifies the name of the table to create/use in the SQLite database")
@@ -76,8 +77,18 @@ pub fn parse_args() -> AppArgs {
                 .num_args(1),
         )
         .arg(
+            Arg::new("database_type")
+                .short('b')
+                .long("database")
+                .value_name("DATABASE_TYPE")
+                .help("Specifies the database type. Default: sqlite")
+                .required(false)
+                .default_value("sqlite")
+                .num_args(1),
+        )
+        .arg(
             Arg::new("drop_existing")
-                .short('D')
+                .short('x')
                 .long("drop-existing")
                 .help("If set, drops the target table if it already exists before inserting new data")
                 .required(false)
@@ -85,7 +96,7 @@ pub fn parse_args() -> AppArgs {
         )
         .arg(
             Arg::new("batch_size")
-                .short('b')
+                .short('s')
                 .long("batch-size")
                 .value_name("SIZE")
                 .help("Specifies the number of rows to insert in a single batch/transaction. Defaults to a predefined value if not set. Default value: 10000")
@@ -96,8 +107,7 @@ pub fn parse_args() -> AppArgs {
         )
         .arg(
             Arg::new("threads")
-                .short('j') // 'j' for jobs/parallelism, as 't' is taken
-                .long("threads")
+                .short('t')
                 .value_name("COUNT")
                 .help("Specifies the number of worker threads to use for processing")
                 .required(false)
@@ -122,6 +132,11 @@ pub fn parse_args() -> AppArgs {
         .expect("'table_name' argument is required and checked by clap.")
         .to_string();
 
+    let database_type: String = matches
+        .get_one::<String>("database_type")
+        .unwrap()
+        .to_string();
+
     let column_count = matches
         .get_one::<String>("column_count")
         .expect("'column_count' argument is required and checked by clap.")
@@ -135,10 +150,13 @@ pub fn parse_args() -> AppArgs {
     let delimiter = matches
     .get_one::<String>("delimiter")
     .map(|s| match s.as_str() {
-        "\\t" => '\t',
-        "\\n" => '\n',
-        "\\r" => '\r',
-        _ => s.chars().next().unwrap_or(','),
+        "t" | "\\t" => b'\t',
+        "n" | "\\n" => b'\n',
+        "r" | "\\r" => b'\r',
+        "," => b',',
+        ";" => b';',
+        "|" => b'|',
+        _ => s.chars().next().unwrap_or(',') as u8,
     });
 
     let drop_existing = matches.get_flag("drop_existing");
@@ -159,6 +177,7 @@ pub fn parse_args() -> AppArgs {
         column_count,
         encoding,
         delimiter,
+        database_type,
         drop_existing,
         batch_size,
         threads,

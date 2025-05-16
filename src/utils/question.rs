@@ -1,6 +1,4 @@
 use std::io::{self, Write};
-use csv::{StringRecord};
-use tabled::grid::records::ExactRecords;
 
 use super::printed;
 

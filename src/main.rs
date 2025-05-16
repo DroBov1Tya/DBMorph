@@ -2,7 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use tokio::time::Instant;
 use tokio::sync::Semaphore;
-use tracing::info;
+use tracing::{info, warn};
 
 mod input;
 mod output;
@@ -28,20 +28,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let delimiter = args.delimiter;
     let batch_size = args.batch_size;
     let drop_existing = args.drop_existing;
+    let database_type = args.database_type;
     let threads = args.threads;
 
-    if drop_existing == true {
-        let _delete_exists_table = output::sqlite::delete_exists_table(output_file.clone(), table_name.clone());
+    match database_type.as_str() {
+        "sqlite" => {
+            let _sqlite_processing = output::sqlite::sqlite_processing(input_file, output_file, table_name, drop_existing, batch_size, delimiter).await;
+        },
+        _ => {
+        }
     }
-
-    let sqlite_columns = output::sqlite::create_fts5_table(output_file.clone(), table_name.clone(), column_count);
-    let encoding = transform::encoding::detect_encoding(input_file.clone())?;
-
-    info!("Detected input file charset encoding: {}", encoding);
-
-    let all_rows = input::csv_parse::csv_row_reader(input_file.clone(), delimiter.unwrap(), encoding).unwrap();
-
-    let _start_process = output::sqlite::init_insert_process(output_file.clone(), table_name.clone(), sqlite_columns.unwrap(), batch_size, all_rows);
     // let semaphore = Arc::new(Semaphore::new(threads.try_into().unwrap()));
     
     let duration = start.elapsed();

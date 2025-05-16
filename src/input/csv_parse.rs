@@ -6,9 +6,10 @@ use csv::{self, StringRecord};
 use csv::ReaderBuilder;
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
+use tracing::info;
 
 
-pub fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: char, encoding: String) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
+pub async fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: u8, encoding: String) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
     let path_ref = csv_file.as_ref();
     
     let file = File::open(path_ref)
@@ -22,7 +23,7 @@ pub fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: char, encoding: St
         .build(BufReader::new(file));
 
     let csv_reader = ReaderBuilder::new()
-        .delimiter(delimiter as u8)
+        .delimiter(delimiter)
         .has_headers(true)
         .flexible(true)
         .from_reader(decoding_reader);
@@ -32,4 +33,23 @@ pub fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: char, encoding: St
         .map(|res| res.map_err(|e| Box::new(e) as Box<dyn Error>));
 
     Ok(iter)
+}
+
+pub async fn check_max_collumns<P: AsRef<Path>>(
+    csv_file: P,
+    delimiter: u8,
+    encoding: String
+) -> Result<i32, Box<dyn Error>> {
+    let mut all_rows = csv_row_reader(csv_file, delimiter, encoding).await.unwrap();
+    if let Some(result) = all_rows.next() {
+        let record = result?;
+        let columns_count = record.len();
+        println!("[+] Определено количество колонок: {}", columns_count);
+        
+        drop(all_rows);
+
+        Ok(columns_count.try_into().unwrap())
+    } else {
+        Err("Нет строк в CSV".into())
+    }
 }
