@@ -36,9 +36,9 @@ pub async fn delete_exists_table(
     let mut conn = Connection::open(format!("./{}.db", database_name))?;
     let tx = conn.transaction()?;
 
-    let delete_sql = "DROP TABLE IF EXISTS $1";
+    let delete_sql = format!("DROP TABLE IF EXISTS \"{}\"", table_name);
 
-    let _ = tx.execute(delete_sql, [table_name.clone()]);
+    tx.execute(&delete_sql, [])?;
     let _ = tx.commit();
 
     info!("[+] Successfult deleted existing table {}", table_name);
@@ -55,7 +55,7 @@ pub async fn init_insert_process(
 ) -> Result<(), Box<dyn Error>> {
     let mut conn = Connection::open(format!("./{}.db", database_name))?;
     let _mode: String = conn.query_row(
-    "PRAGMA journal_mode = WAL;", 
+    "PRAGMA journal_mode = OFF;", 
     [], 
     |row| row.get(0)
     )?;

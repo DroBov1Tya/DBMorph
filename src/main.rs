@@ -29,16 +29,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let batch_size = args.batch_size;
     let drop_existing = args.drop_existing;
     let database_type = args.database_type;
+    let inpun_file_type = args.inpun_file_type;
     let threads = args.threads;
+
+    // let semaphore = Arc::new(Semaphore::new(threads.try_into().unwrap()));
 
     match database_type.as_str() {
         "sqlite" => {
-            let _sqlite_processing = output::sqlite::sqlite_processing(input_file, output_file, table_name, drop_existing, batch_size, delimiter).await;
+            let _sqlite_processing = output::sqlite::sqlite_processing(
+                input_file,
+                output_file,
+                table_name,
+                encoding,
+                drop_existing,
+                batch_size,
+                delimiter,
+                inpun_file_type
+            ).await;
         },
         _ => {
         }
     }
-    // let semaphore = Arc::new(Semaphore::new(threads.try_into().unwrap()));
     
     let duration = start.elapsed();
     info!("[+] Total execution time: {:?}", duration);

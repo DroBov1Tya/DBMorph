@@ -1,9 +1,10 @@
 use std::fs::File;
+use std::error::Error;
 use std::io::{self, Read};
 use std::path::Path;
 use chardetng::EncodingDetector;
 
-pub fn detect_encoding<P: AsRef<Path>>(file_path: P) -> io::Result<String> {
+pub fn detect_encoding<P: AsRef<Path>>(file_path: P) -> Result<String, Box<dyn Error>> {
     let sample_size = 10000;
     let f = File::open(file_path)?;
     let mut buffer = Vec::with_capacity(sample_size);
