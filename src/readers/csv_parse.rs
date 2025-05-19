@@ -1,17 +1,21 @@
-use std::io::BufReader;
-use std::path::Path;
-use std::fs::File;
-use std::error::Error;
-use csv::{self, StringRecord};
+use colored::*;
 use csv::ReaderBuilder;
+use csv::{self, StringRecord};
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::Path;
 use tracing::info;
 
-
-pub async fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: u8, encoding: String) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
+pub async fn csv_row_reader<P: AsRef<Path>>(
+    csv_file: P,
+    delimiter: u8,
+    encoding: &String,
+) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
     let path_ref = csv_file.as_ref();
-    
+
     let file = File::open(path_ref)
         .map_err(|e| format!("Failed to open CSV file {:?}: {}", path_ref, e))?;
 
@@ -38,18 +42,30 @@ pub async fn csv_row_reader<P: AsRef<Path>>(csv_file: P, delimiter: u8, encoding
 pub async fn check_max_collumns<P: AsRef<Path>>(
     csv_file: P,
     delimiter: u8,
-    encoding: String
+    encoding: &String,
 ) -> Result<i32, Box<dyn Error>> {
     let mut all_rows = csv_row_reader(csv_file, delimiter, encoding).await.unwrap();
     if let Some(result) = all_rows.next() {
         let record = result?;
         let columns_count = record.len();
-        println!("[+] Определено количество колонок: {}", columns_count);
-        
+        println!(
+            "{}    Column count detected: {}",
+            "✅ [INFO]".cyan().bold(),
+            columns_count
+        );
+
         drop(all_rows);
 
         Ok(columns_count.try_into().unwrap())
     } else {
         Err("Нет строк в CSV".into())
     }
+}
+
+pub async fn count_lines<P: AsRef<Path>>(path: P) -> Result<usize, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let line_count = reader.lines().count();
+
+    Ok(line_count)
 }

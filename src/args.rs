@@ -1,4 +1,4 @@
-use clap::{Arg, ArgAction, Command, value_parser};
+use clap::{value_parser, Arg, ArgAction, Command};
 
 #[derive(Debug)]
 pub struct AppArgs {
@@ -154,27 +154,23 @@ pub fn parse_args() -> AppArgs {
         .parse::<i32>()
         .unwrap();
 
-    let encoding = matches
-        .get_one::<String>("encoding")
-        .map(|s| s.to_string());
+    let encoding = matches.get_one::<String>("encoding").map(|s| s.to_string());
 
     let delimiter = matches
-    .get_one::<String>("delimiter")
-    .map(|s| match s.as_str() {
-        "t" | "\\t" => b'\t',
-        "n" | "\\n" => b'\n',
-        "r" | "\\r" => b'\r',
-        "," => b',',
-        ";" => b';',
-        "|" => b'|',
-        _ => s.chars().next().unwrap_or(',') as u8,
-    });
+        .get_one::<String>("delimiter")
+        .map(|s| match s.as_str() {
+            "t" | "\\t" => b'\t',
+            "n" | "\\n" => b'\n',
+            "r" | "\\r" => b'\r',
+            "," => b',',
+            ";" => b';',
+            "|" => b'|',
+            _ => s.chars().next().unwrap_or(',') as u8,
+        });
 
     let drop_existing = matches.get_flag("drop_existing");
 
-    let batch_size = matches
-        .get_one::<u32>("batch_size")
-        .copied();
+    let batch_size = matches.get_one::<u32>("batch_size").copied();
 
     let inpun_file_type = matches
         .get_one::<String>("input_file_type")

@@ -1,24 +1,24 @@
+use colored::*;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::time::Instant;
 use tokio::sync::Semaphore;
+use tokio::time::Instant;
 use tracing::{info, warn};
 
-mod input;
-mod output;
+mod args;
+mod config;
+mod readers;
 mod transform;
 mod utils;
-mod config;
-mod args;
-
+mod writers;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
-    let _logger_init = utils::logging::logger();
+    let _logger_init = utils::logger::logger();
     let args = args::parse_args();
-    
-    info!("[+] Programm started ...");
+
+    utils::output_format::started_text().await;
 
     let input_file = args.input_path;
     let output_file = args.output_path;
@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     match database_type.as_str() {
         "sqlite" => {
-            let _sqlite_processing = output::sqlite::sqlite_processing(
+            let _sqlite_processing = writers::sqlite::sqlite_processing(
                 input_file,
                 output_file,
                 table_name,
@@ -44,14 +44,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 drop_existing,
                 batch_size,
                 delimiter,
-                inpun_file_type
-            ).await;
-        },
-        _ => {
+                inpun_file_type,
+            )
+            .await;
         }
+        _ => {}
     }
-    
+
     let duration = start.elapsed();
-    info!("[+] Total execution time: {:?}", duration);
+    println!(
+        "{}  {} {}",
+        "✅ [INFO]".cyan().bold(),
+        "Total execution time:".bright_white(),
+        format!("{:?}", duration).yellow()
+    );
     Ok(())
 }
