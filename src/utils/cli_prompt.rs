@@ -1,9 +1,12 @@
 use colored::*;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Write};
 
 use super::output_format;
 
-pub async fn process_and_pause(preview: Vec<Vec<String>>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn process_and_pause(
+    preview: Vec<Vec<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut first_records: Vec<Vec<String>> = Vec::new();
 
     for record in preview.iter().take(5) {
@@ -43,6 +46,47 @@ pub async fn process_and_pause(preview: Vec<Vec<String>>) -> Result<(), Box<dyn 
                     "🚫 [ERROR]".red().bold()
                 );
             }
+        }
+    }
+}
+
+pub async fn select_table(
+    database_tables: &BTreeSet<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut index_table_map: HashMap<usize, String> = HashMap::new();
+
+    println!(
+        "{}",
+        "____________________________________________________________"
+            .yellow()
+            .bold()
+    );
+    for (idx, name) in database_tables.iter().enumerate() {
+        index_table_map.insert(idx, name.clone());
+        println!("{}: {}", idx.to_string().yellow().bold(), name.italic());
+    }
+    println!(
+        "{}",
+        "____________________________________________________________"
+            .yellow()
+            .bold()
+    );
+
+    print!("{}", "\nChoose table number: ".green().bold());
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let selected_index: usize = input.trim().parse::<usize>()?;
+
+    match index_table_map.get(&selected_index) {
+        Some(table_name) => {
+            println!("\nChoosen table: {}\n", table_name.green().bold());
+            Ok(table_name.clone())
+        }
+        None => {
+            println!("{}", "Can't find table number {} in map".red());
+            Ok("Err".to_string())
         }
     }
 }

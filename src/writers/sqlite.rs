@@ -5,9 +5,10 @@ use std::{error::Error, str::FromStr};
 use tracing::{error, info, warn};
 
 use crate::{readers, transform};
-mod sqlite_init;
 mod csv_insert;
 mod json_insert;
+mod sql_insert;
+mod sqlite_init;
 
 pub async fn sqlite_processing(
     input_file: String,
@@ -81,13 +82,13 @@ pub async fn sqlite_processing(
     match extension.as_str() {
         "csv" | "txt" => {
             let lines_count = readers::csv_parse::count_lines(&input_file).await?;
-            let column_count=
+            let column_count =
                 readers::csv_parse::check_max_collumns(&input_file, delimiter.unwrap(), &encoding)
-                    .await.unwrap_or(column_count);
+                    .await
+                    .unwrap_or(column_count);
 
             let columns =
-                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count)
-                    .await;
+                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count).await;
 
             let all_rows = readers::csv_parse::csv_row_reader(
                 input_file.clone(),
@@ -109,26 +110,46 @@ pub async fn sqlite_processing(
         }
         "json" => {
             let lines_count = readers::json_parse::count_objects_with_keys(&input_file).await?;
-            let column_count =
-                readers::json_parse::count_keys_in_first_json(&input_file).await.unwrap_or(column_count);
+            let column_count = readers::json_parse::count_keys_in_first_json(&input_file)
+                .await
+                .unwrap_or(column_count);
 
             let columns =
-                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count)
-                    .await;
+                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count).await;
 
             let json_stream = readers::json_parse::read_json_lines_flat(input_file).await;
-            let _result = json_insert::processing_json(&mut sqlite_conn,
+            let _result = json_insert::processing_json(
+                &mut sqlite_conn,
                 &table_name,
                 columns.unwrap(),
                 json_stream,
                 batch_size,
-                lines_count
+                lines_count,
             )
             .await?;
         }
         "xlsx" => {}
         "sql" => {
-            let check = readers::sql_parse::parse_dump_simple(input_file).await;
+            let target_table_name = readers::sql_parse::extract_table_names(&input_file).await?;
+            let total_rows =
+                readers::sql_parse::count_rows_in_table(&input_file, &target_table_name).await?;
+            let columns_count =
+                readers::sql_parse::count_columns_in_first_row(&input_file, &target_table_name)
+                    .await?;
+            let columns =
+                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, columns_count).await;
+
+            let init_process = sql_insert::init_sql(
+                &mut sqlite_conn,
+                input_file,
+                table_name,
+                target_table_name,
+                columns.unwrap(),
+                encoding,
+                batch_size,
+                total_rows
+            )
+            .await?;
         }
         _ => {
             warn!(

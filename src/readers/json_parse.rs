@@ -1,9 +1,10 @@
-use std::collections::HashMap;
-use std::collections::BTreeMap;
-use std::path::Path;
-use serde_json::Value;
+use colored::*;
 use futures::stream::{self, Stream};
 use futures::StreamExt;
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -90,7 +91,7 @@ pub async fn count_objects_with_keys<P: AsRef<Path>>(path: P) -> Result<u32, Str
         match result {
             Ok(map) if !map.is_empty() => count += 1,
             Ok(_) => {}
-            Err(e) => eprintln!("Error: {}", e),
+            Err(err) => eprintln!("{} Error: {}", "🚫 [ERROR]".red().bold(), err),
         }
     }
 

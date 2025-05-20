@@ -17,7 +17,7 @@ pub struct AppArgs {
 
 pub fn parse_args() -> AppArgs {
     let matches = Command::new("DBMorph")
-        .version("v0.1.1-dev")
+        .version("v0.2.1-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(

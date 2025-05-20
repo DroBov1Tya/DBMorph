@@ -1,11 +1,11 @@
-use std::error::Error;
 use colored::*;
 use csv::StringRecord;
-use sqlx::{sqlite::SqliteQueryResult, SqliteConnection};
+use sqlx::SqliteConnection;
+use std::error::Error;
 
+use super::sqlite_init;
 use crate::utils::cli_prompt::process_and_pause;
 use crate::utils::output_format;
-use super::sqlite_init;
 
 pub async fn init_insert_process(
     conn: &mut SqliteConnection,
@@ -13,7 +13,7 @@ pub async fn init_insert_process(
     columns: Vec<String>,
     batch_size: Option<u32>,
     all_rows: impl Iterator<Item = Result<StringRecord, Box<dyn std::error::Error>>>,
-    lines_count: usize
+    total_rows: usize,
 ) -> Result<(), Box<dyn Error>> {
     let mode: (String,) = sqlx::query_as("PRAGMA journal_mode = OFF;")
         .fetch_one(&mut *conn)
@@ -31,7 +31,7 @@ pub async fn init_insert_process(
     let preview_count = 5;
     let batch_size = batch_size.unwrap().try_into().unwrap();
     let mut preview_shown = false;
-    let mut total_rows = 0;
+    let mut lines_count = 0;
 
     let mut chunk: Vec<Vec<String>> = Vec::with_capacity(batch_size);
 
@@ -40,7 +40,7 @@ pub async fn init_insert_process(
             Ok(record) => {
                 let fields: Vec<String> = record.iter().map(|s| s.to_string()).collect();
                 chunk.push(fields);
-                total_rows += 1;
+                lines_count += 1;
 
                 if !preview_shown && chunk.len() == preview_count {
                     let preview = chunk[..preview_count].to_vec();
@@ -49,10 +49,11 @@ pub async fn init_insert_process(
                 }
 
                 if chunk.len() >= batch_size {
-                    sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
+                    sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
+                        .await?;
                     chunk.clear();
 
-                    output_format::sqlite_processing(total_rows, lines_count).await;
+                    output_format::sqlite_processing(lines_count, total_rows).await;
                 }
             }
             Err(e) => {
@@ -67,7 +68,7 @@ pub async fn init_insert_process(
 
     if !chunk.is_empty() {
         sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
-        output_format::sqlite_processing_finish(total_rows).await;
+        output_format::sqlite_processing_finish(lines_count).await;
         chunk.clear();
     }
 

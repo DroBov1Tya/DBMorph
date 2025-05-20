@@ -4,7 +4,7 @@ use tokio::io::{self, AsyncWriteExt};
 
 pub async fn started_text() {
     println!(
-        "{}\n{}\n",
+        "{}\n{}\n{}\n",
         r#"
 ██████╗ ██████╗ ███╗   ███╗ ██████╗ ██████╗ ██████╗ ██╗  ██╗
 ██╔══██╗██╔══██╗████╗ ████║██╔═══██╗██╔══██╗██╔══██╗██║  ██║
@@ -13,10 +13,11 @@ pub async fn started_text() {
 ██████╔╝██████╔╝██║ ╚═╝ ██║╚██████╔╝██║  ██║██║     ██║  ██║
 ╚═════╝ ╚═════╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
                                                             
-Version: v0.1.1-dev
-____________________________________________________________
-    "#.green(),
-    "by github.com/DroBov1Tya".bright_cyan().italic()
+Version: v0.2.1-dev
+    "#
+        .green(),
+        "by github.com/DroBov1Tya".bright_cyan().italic(),
+        "____________________________________________________________".green(),
     );
 }
 
@@ -25,7 +26,6 @@ pub async fn print_csv_table(records: &[Vec<String>]) {
         println!("{}    No records to display.", "⚠️ [WARN]".yellow().bold());
         return;
     }
-    let mut preview: Vec<String> = Vec::new();
     let max_cols = 5;
     let max_rows = 5;
 
@@ -49,24 +49,24 @@ pub async fn print_csv_table(records: &[Vec<String>]) {
     println!("{}", table);
 }
 
-pub async fn sqlite_processing(total_rows: i32, lines_count: usize) {
+pub async fn sqlite_processing(lines_count: i32, total_rows: usize) {
     let status = format!(
         "\r{} {} / {}",
         "🔄 [PROCESSING]".bold().cyan(),
-        total_rows.to_string().bold().yellow(),
-        lines_count.to_string().bold().bright_black()
+        lines_count.to_string().bold().yellow(),
+        total_rows.to_string().bold().bright_black()
     );
 
     print!("{:<80}", status);
     io::stdout().flush().await.unwrap();
-} 
+}
 
-pub async fn sqlite_processing_finish(total_rows: i32) {
+pub async fn sqlite_processing_finish(lines_count: i32) {
     let status = format!(
         "{}    Rows processed: {}",
         "✅ [DONE]".green().bold(),
-        &total_rows
+        &lines_count
     );
 
-    print!("\r{}\n", status);
-} 
+    print!("\r{}", status);
+}

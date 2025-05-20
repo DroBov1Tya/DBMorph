@@ -3,8 +3,6 @@ use sqlx::{sqlite::SqliteQueryResult, SqliteConnection};
 use std::error::Error;
 use tracing::info;
 
-
-
 pub async fn create_fts5_table(
     conn: &mut SqliteConnection,
     table_name: &String,
