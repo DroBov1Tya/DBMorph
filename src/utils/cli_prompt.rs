@@ -14,12 +14,12 @@ pub async fn process_and_pause(preview: Vec<Vec<String>>) -> Result<(), Box<dyn 
 
     loop {
         println!(
-            "{} {} (Press {} to continue, {} to exit, {} by default): ",
-            "⚠️".yellow(),
-            "Do you want to continue?".bold(),
-            "Y/y".green().bold(),
-            "N/n".red().bold(),
-            "Enter".cyan().italic()
+            "{} {} [{}/{}] ({})",
+            "⚠️",
+            "Continue?".bold(),
+            "Y".green().bold(),
+            "n".red().bold(),
+            "default: Enter".cyan().italic()
         );
         io::stdout().flush()?;
 

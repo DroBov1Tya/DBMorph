@@ -11,13 +11,13 @@ pub struct AppArgs {
     pub database_type: String,
     pub drop_existing: bool,
     pub batch_size: Option<u32>,
-    pub inpun_file_type: Option<String>,
+    pub input_file_type: Option<String>,
     pub threads: u32,
 }
 
 pub fn parse_args() -> AppArgs {
     let matches = Command::new("DBMorph")
-        .version("0.0.3")
+        .version("v0.1.1-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -113,7 +113,6 @@ pub fn parse_args() -> AppArgs {
                 .value_name("INPUT_FILE_TYPE")
                 .help("Specifies the name of the table to create/use in the SQLite database")
                 .required(false)
-                .default_value("csv")
                 .num_args(1),
         )
         .arg(
@@ -172,7 +171,7 @@ pub fn parse_args() -> AppArgs {
 
     let batch_size = matches.get_one::<u32>("batch_size").copied();
 
-    let inpun_file_type = matches
+    let input_file_type = matches
         .get_one::<String>("input_file_type")
         .map(|s| s.to_string());
 
@@ -191,7 +190,7 @@ pub fn parse_args() -> AppArgs {
         database_type,
         drop_existing,
         batch_size,
-        inpun_file_type,
+        input_file_type,
         threads,
     }
 }

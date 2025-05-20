@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let batch_size = args.batch_size;
     let drop_existing = args.drop_existing;
     let database_type = args.database_type;
-    let inpun_file_type = args.inpun_file_type;
+    let input_file_type = args.input_file_type;
     let threads = args.threads;
 
     // let semaphore = Arc::new(Semaphore::new(threads.try_into().unwrap()));
@@ -40,11 +40,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 input_file,
                 output_file,
                 table_name,
+                column_count,
                 encoding,
                 drop_existing,
                 batch_size,
                 delimiter,
-                inpun_file_type,
+                input_file_type,
             )
             .await;
         }

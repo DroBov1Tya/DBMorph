@@ -104,10 +104,8 @@ pub fn extract_insert_values(sql: &str, table_name: &str) -> Vec<Vec<String>> {
         }
     }
 
-    // Удаляем завершающую точку с запятой
     let cleaned = buffer.trim_end_matches(';').trim();
 
-    // Разбиваем по "),(" границе между записями
     for row in cleaned.split("),(") {
         let row_clean = row.trim_start_matches('(').trim_end_matches(')').trim();
         let values = row_clean

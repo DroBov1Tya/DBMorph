@@ -5,17 +5,20 @@ use std::{error::Error, str::FromStr};
 use tracing::{error, info, warn};
 
 use crate::{readers, transform};
-mod requests;
+mod sqlite_init;
+mod csv_insert;
+mod json_insert;
 
 pub async fn sqlite_processing(
     input_file: String,
     output_file: String,
     table_name: String,
+    column_count: i32,
     encoding: Option<String>,
     drop_existing: bool,
     batch_size: Option<u32>,
     delimiter: Option<u8>,
-    inpun_file_type: Option<String>,
+    input_file_type: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(size) = batch_size {
         if size > 1000 {
@@ -27,6 +30,22 @@ pub async fn sqlite_processing(
         }
     }
 
+    let extension = if let Some(file_type) = input_file_type {
+        file_type
+            .split('.')
+            .last()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    } else {
+        let ext = input_file
+            .split('.')
+            .last()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        println!("{}    Found extension: {}", "✅ [AUTO]".green().bold(), ext);
+        ext
+    };
+
     let db_path = format!("sqlite://{}.db", output_file);
 
     println!(
@@ -36,7 +55,6 @@ pub async fn sqlite_processing(
     );
 
     let connect_opts = SqliteConnectOptions::from_str(&db_path)?.create_if_missing(true);
-
     let mut sqlite_conn = SqliteConnection::connect_with(&connect_opts).await?;
 
     println!(
@@ -46,7 +64,7 @@ pub async fn sqlite_processing(
 
     if drop_existing == true {
         let _delete_exists_table =
-            requests::delete_exists_table(&mut sqlite_conn, &table_name).await;
+            sqlite_init::delete_exists_table(&mut sqlite_conn, &table_name).await;
     }
 
     let encoding = match encoding {
@@ -60,15 +78,15 @@ pub async fn sqlite_processing(
         &encoding
     );
 
-    match inpun_file_type.unwrap().as_str() {
+    match extension.as_str() {
         "csv" | "txt" => {
             let lines_count = readers::csv_parse::count_lines(&input_file).await?;
-            let column_count: Result<i32, Box<dyn Error + 'static>> =
+            let column_count=
                 readers::csv_parse::check_max_collumns(&input_file, delimiter.unwrap(), &encoding)
-                    .await;
+                    .await.unwrap_or(column_count);
 
             let columns =
-                requests::create_fts5_table(&mut sqlite_conn, &table_name, column_count.unwrap())
+                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count)
                     .await;
 
             let all_rows = readers::csv_parse::csv_row_reader(
@@ -78,7 +96,8 @@ pub async fn sqlite_processing(
             )
             .await
             .unwrap();
-            let _start_process = requests::init_insert_process(
+
+            let _start_process = csv_insert::init_insert_process(
                 &mut sqlite_conn,
                 &table_name,
                 columns.unwrap(),
@@ -88,7 +107,25 @@ pub async fn sqlite_processing(
             )
             .await;
         }
-        "json" => {}
+        "json" => {
+            let lines_count = readers::json_parse::count_objects_with_keys(&input_file).await?;
+            let column_count =
+                readers::json_parse::count_keys_in_first_json(&input_file).await.unwrap_or(column_count);
+
+            let columns =
+                sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count)
+                    .await;
+
+            let json_stream = readers::json_parse::read_json_lines_flat(input_file).await;
+            let _result = json_insert::processing_json(&mut sqlite_conn,
+                &table_name,
+                columns.unwrap(),
+                json_stream,
+                batch_size,
+                lines_count
+            )
+            .await?;
+        }
         "xlsx" => {}
         "sql" => {
             let check = readers::sql_parse::parse_dump_simple(input_file).await;
