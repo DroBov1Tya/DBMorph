@@ -16,9 +16,10 @@ pub async fn sqlite_processing(
     table_name: String,
     column_count: i32,
     encoding: Option<String>,
+    delimiter: Option<u8>,
+    remove_rows: Option<usize>,
     drop_existing: bool,
     batch_size: Option<u32>,
-    delimiter: Option<u8>,
     input_file_type: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(size) = batch_size {
@@ -81,9 +82,9 @@ pub async fn sqlite_processing(
 
     match extension.as_str() {
         "csv" | "txt" => {
-            let lines_count = readers::csv_parse::count_lines(&input_file).await?;
+            let lines_count = readers::csv_parse::count_lines(&input_file, remove_rows).await?;
             let column_count =
-                readers::csv_parse::check_max_collumns(&input_file, delimiter.unwrap(), &encoding)
+                readers::csv_parse::check_max_collumns(&input_file, &encoding, delimiter.unwrap(), remove_rows)
                     .await
                     .unwrap_or(column_count);
 
@@ -92,8 +93,9 @@ pub async fn sqlite_processing(
 
             let all_rows = readers::csv_parse::csv_row_reader(
                 input_file.clone(),
-                delimiter.unwrap(),
                 &encoding,
+                delimiter.unwrap(),
+                remove_rows
             )
             .await
             .unwrap();
@@ -118,7 +120,7 @@ pub async fn sqlite_processing(
                 sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count).await;
 
             let json_stream = readers::json_parse::read_json_lines_flat(input_file).await;
-            let _result = json_insert::processing_json(
+            let _start_process = json_insert::processing_json(
                 &mut sqlite_conn,
                 &table_name,
                 columns.unwrap(),
@@ -139,7 +141,7 @@ pub async fn sqlite_processing(
             let columns =
                 sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, columns_count).await;
 
-            let init_process = sql_insert::init_sql(
+            let _start_process = sql_insert::init_sql(
                 &mut sqlite_conn,
                 input_file,
                 table_name,

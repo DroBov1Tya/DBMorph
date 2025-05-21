@@ -32,6 +32,7 @@ pub async fn init_insert_process(
     let batch_size = batch_size.unwrap().try_into().unwrap();
     let mut preview_shown = false;
     let mut lines_count = 0;
+    let progress_bar = output_format::init_progress_bar(total_rows as u64).await?;
 
     let mut chunk: Vec<Vec<String>> = Vec::with_capacity(batch_size);
 
@@ -49,11 +50,11 @@ pub async fn init_insert_process(
                 }
 
                 if chunk.len() >= batch_size {
+                    progress_bar.set_position(lines_count);
                     sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
                         .await?;
                     chunk.clear();
 
-                    output_format::sqlite_processing(lines_count, total_rows).await;
                 }
             }
             Err(e) => {
@@ -68,7 +69,7 @@ pub async fn init_insert_process(
 
     if !chunk.is_empty() {
         sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
-        output_format::sqlite_processing_finish(lines_count).await;
+        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
         chunk.clear();
     }
 

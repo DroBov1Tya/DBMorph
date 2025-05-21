@@ -1,6 +1,8 @@
-use colored::*;
-use tabled::builder::Builder;
+use std::error::Error;
 use tokio::io::{self, AsyncWriteExt};
+use colored::*;
+use indicatif::{ProgressBar, ProgressStyle};
+use tabled::builder::Builder;
 
 pub async fn started_text() {
     println!(
@@ -13,7 +15,7 @@ pub async fn started_text() {
 ██████╔╝██████╔╝██║ ╚═╝ ██║╚██████╔╝██║  ██║██║     ██║  ██║
 ╚═════╝ ╚═════╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
                                                             
-Version: v0.2.1-dev
+Version: v0.2.2-dev
     "#
         .green(),
         "by github.com/DroBov1Tya".bright_cyan().italic(),
@@ -69,4 +71,18 @@ pub async fn sqlite_processing_finish(lines_count: i32) {
     );
 
     print!("\r{}", status);
+}
+
+pub async fn init_progress_bar(total_rows: u64) -> Result<ProgressBar, Box<dyn Error>> {
+    let progress_bar = ProgressBar::new(total_rows);
+
+    progress_bar.set_style(
+        ProgressStyle::with_template(
+            "{spinner} ⚡ {percent}% [{bar:35.blue/black}] ⚙️ {pos}/{len} | ⚡ ETA: {eta_precise} • {per_sec}" 
+        )
+        .unwrap()
+        .progress_chars("█░ "),
+    );
+
+    Ok(progress_bar)
 }

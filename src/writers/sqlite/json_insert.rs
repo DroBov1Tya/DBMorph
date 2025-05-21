@@ -2,12 +2,13 @@ use colored::*;
 use futures::stream::Stream;
 use futures::StreamExt;
 use sqlx::SqliteConnection;
+use tracing_subscriber::fmt::format;
 use std::collections::BTreeMap;
 use std::error::Error;
 
 use super::sqlite_init;
 use crate::utils::cli_prompt::process_and_pause;
-use crate::utils::output_format::{sqlite_processing, sqlite_processing_finish};
+use crate::utils::output_format;
 
 pub async fn processing_json(
     conn: &mut SqliteConnection,
@@ -22,6 +23,7 @@ pub async fn processing_json(
     let mut chunk: Vec<Vec<String>> = Vec::new();
     let mut preview_shown = false;
     let mut lines_count = 0;
+    let progress_bar = output_format::init_progress_bar(total_rows as u64).await?;
 
     while let Some(result) = json_stream.next().await {
         match result {
@@ -37,7 +39,7 @@ pub async fn processing_json(
                 }
 
                 if chunk.len() as u32 >= max_chunk_size {
-                    let _ = sqlite_processing(lines_count, total_rows.try_into().unwrap()).await;
+                    progress_bar.set_position(lines_count);
                     let _ =
                         sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
                             .await?;
@@ -50,7 +52,7 @@ pub async fn processing_json(
         }
     }
     if !chunk.is_empty() {
-        let _ = sqlite_processing_finish(lines_count).await;
+        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
         let _ = sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
         chunk.clear();
     }

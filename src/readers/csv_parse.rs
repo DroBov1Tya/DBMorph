@@ -11,8 +11,9 @@ use tracing::info;
 
 pub async fn csv_row_reader<P: AsRef<Path>>(
     csv_file: P,
-    delimiter: u8,
     encoding: &String,
+    delimiter: u8,
+    remove_rows: Option<usize>,
 ) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
     let path_ref = csv_file.as_ref();
 
@@ -26,11 +27,18 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
         .encoding(Some(rust_encoding))
         .build(BufReader::new(file));
 
-    let csv_reader = ReaderBuilder::new()
+    let mut csv_reader = ReaderBuilder::new()
         .delimiter(delimiter)
         .has_headers(true)
         .flexible(true)
         .from_reader(decoding_reader);
+
+
+    if let Some(skip_rows) = remove_rows {
+        for _ in 0..skip_rows {
+            let _ = csv_reader.records().next();
+        }
+    }
 
     let iter = csv_reader
         .into_records()
@@ -41,10 +49,11 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
 
 pub async fn check_max_collumns<P: AsRef<Path>>(
     csv_file: P,
-    delimiter: u8,
     encoding: &String,
+    delimiter: u8,
+    remove_rows: Option<usize>,
 ) -> Result<i32, Box<dyn Error>> {
-    let mut all_rows = csv_row_reader(csv_file, delimiter, encoding).await.unwrap();
+    let mut all_rows = csv_row_reader(csv_file, encoding, delimiter, remove_rows).await.unwrap();
     if let Some(result) = all_rows.next() {
         let record = result?;
         let columns_count = record.len();
@@ -62,10 +71,15 @@ pub async fn check_max_collumns<P: AsRef<Path>>(
     }
 }
 
-pub async fn count_lines<P: AsRef<Path>>(path: P) -> Result<usize, Box<dyn Error>> {
+pub async fn count_lines<P: AsRef<Path>>(path: P, remove_rows: Option<usize>) -> Result<usize, Box<dyn Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let line_count = reader.lines().count();
+    let lines = reader.lines();
 
-    Ok(line_count)
+    let count = match remove_rows {
+        Some(skip) => lines.skip(skip).count(),
+        None => lines.count(),
+    };
+
+    Ok(count)
 }

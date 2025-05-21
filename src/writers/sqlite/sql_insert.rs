@@ -6,7 +6,7 @@ use futures::StreamExt;
 
 use crate::readers::sql_parse;
 use crate::utils::cli_prompt::process_and_pause;
-use crate::utils::output_format::{sqlite_processing_finish, sqlite_processing};
+use crate::utils::output_format;
 use crate::writers::sqlite::sqlite_init;
 
 pub async fn init_sql(
@@ -41,6 +41,7 @@ pub async fn init_sql(
     let mut chunk: Vec<Vec<String>> = Vec::new();
     let mut preview_shown = false;
     let mut lines_count = 0;
+    let progress_bar = output_format::init_progress_bar(total_rows as u64).await?;
 
     while let Some(row) = stream.next().await {
         chunk.push(row);
@@ -53,7 +54,7 @@ pub async fn init_sql(
         }
 
         if chunk.len() as u32 >= max_chunk_size {
-            let _ = sqlite_processing(lines_count, total_rows.try_into().unwrap()).await;
+            progress_bar.set_position(lines_count);
             let _ =
                 sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
                     .await?;
@@ -61,7 +62,7 @@ pub async fn init_sql(
         }
     }
     if !chunk.is_empty() {
-        let _ = sqlite_processing_finish(lines_count).await;
+        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
         let _ = sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
         chunk.clear();
     }

@@ -26,9 +26,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let column_count = args.column_count;
     let encoding = args.encoding;
     let delimiter = args.delimiter;
+    let remove_rows = args.remove_rows;
     let batch_size = args.batch_size;
     let drop_existing = args.drop_existing;
     let database_type = args.database_type;
+    let database_url = args.database_url;
+    let database_user = args.database_user;
+    let database_pass = args.database_pass;
     let input_file_type = args.input_file_type;
     let threads = args.threads;
 
@@ -42,9 +46,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 table_name,
                 column_count,
                 encoding,
+                delimiter,
+                remove_rows,
                 drop_existing,
                 batch_size,
-                delimiter,
                 input_file_type,
             )
             .await;

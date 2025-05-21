@@ -8,7 +8,11 @@ pub struct AppArgs {
     pub column_count: i32,
     pub encoding: Option<String>,
     pub delimiter: Option<u8>,
+    pub remove_rows: Option<usize>,
     pub database_type: String,
+    pub database_url: Option<String>,
+    pub database_user: Option<String>,
+    pub database_pass: Option<String>,
     pub drop_existing: bool,
     pub batch_size: Option<u32>,
     pub input_file_type: Option<String>,
@@ -17,7 +21,7 @@ pub struct AppArgs {
 
 pub fn parse_args() -> AppArgs {
     let matches = Command::new("DBMorph")
-        .version("v0.2.1-dev")
+        .version("v0.2.2-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -72,10 +76,20 @@ pub fn parse_args() -> AppArgs {
                 .short('d')
                 .long("delimiter")
                 .value_name("DELIMITER_CHAR")
-                .help("Specifies the field delimiter character for the input file (e.g., ',', '\\t'). Defaults to ',' if not provided.")
+                .help("Specifies the field delimiter character for the input file (e.g., ',', 't'). Defaults to ',' if not provided.")
                 .required(false)
                 .default_value(",")
                 .num_args(1),
+        )
+        .arg(
+            Arg::new("remove_rows")
+                .short('r')
+                .long("remove-rows")
+                .value_name("REMOVE_ROWS_COUNT")
+                .help("Skips the specified number of initial rows in the input file before processing begins.")
+                .required(false)
+                .num_args(1)
+                .value_parser(clap::value_parser!(usize)),
         )
         .arg(
             Arg::new("database_type")
@@ -85,6 +99,33 @@ pub fn parse_args() -> AppArgs {
                 .help("Specifies the database type. Default: sqlite")
                 .required(false)
                 .default_value("sqlite")
+                .num_args(1),
+        )
+        .arg(
+            Arg::new("database_url")
+                .short('u')
+                .long("db-url")
+                .value_name("DATABASE_URL")
+                .help("Specifies the database connection string.")
+                .required(false)
+                .num_args(1),
+        )
+        .arg(
+            Arg::new("database_user")
+                .short('U')
+                .long("db-user")
+                .value_name("DATABASE_USER")
+                .help("Specifies the database user.")
+                .required(false)
+                .num_args(1),
+        )
+        .arg(
+            Arg::new("database_pass")
+                .short('p')
+                .long("db-password")
+                .value_name("DATABASE_PASSWORD")
+                .help("Specifies the database password.")
+                .required(false)
                 .num_args(1),
         )
         .arg(
@@ -142,17 +183,6 @@ pub fn parse_args() -> AppArgs {
         .expect("'table_name' argument is required and checked by clap.")
         .to_string();
 
-    let database_type: String = matches
-        .get_one::<String>("database_type")
-        .unwrap()
-        .to_string();
-
-    let column_count = matches
-        .get_one::<String>("column_count")
-        .expect("'column_count' argument is required and checked by clap.")
-        .parse::<i32>()
-        .unwrap();
-
     let encoding = matches.get_one::<String>("encoding").map(|s| s.to_string());
 
     let delimiter = matches
@@ -166,6 +196,31 @@ pub fn parse_args() -> AppArgs {
             "|" => b'|',
             _ => s.chars().next().unwrap_or(',') as u8,
         });
+
+    let remove_rows = matches.get_one::<usize>("remove_rows").copied();
+
+    let database_type: String = matches
+        .get_one::<String>("database_type")
+        .unwrap()
+        .to_string();
+
+    let database_url: Option<String> = matches
+        .get_one::<String>("database_url")
+        .map(|s| s.to_string());
+
+    let database_user: Option<String> = matches
+        .get_one::<String>("database_user")
+        .map(|s| s.to_string());
+
+    let database_pass: Option<String> = matches
+        .get_one::<String>("database_pass")
+        .map(|s| s.to_string());
+
+    let column_count = matches
+        .get_one::<String>("column_count")
+        .expect("'column_count' argument is required and checked by clap.")
+        .parse::<i32>()
+        .unwrap();
 
     let drop_existing = matches.get_flag("drop_existing");
 
@@ -187,7 +242,11 @@ pub fn parse_args() -> AppArgs {
         column_count,
         encoding,
         delimiter,
+        remove_rows,
         database_type,
+        database_url,
+        database_user,
+        database_pass,
         drop_existing,
         batch_size,
         input_file_type,
