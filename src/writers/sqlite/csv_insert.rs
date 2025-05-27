@@ -15,6 +15,11 @@ pub async fn init_insert_process(
     all_rows: impl Iterator<Item = Result<StringRecord, Box<dyn std::error::Error>>>,
     total_rows: usize,
 ) -> Result<(), Box<dyn Error>> {
+    // Disables SQLite journaling and synchronous mode for faster inserts
+    // Iterates over CSV rows, collects them in batches, and inserts into SQLite
+    // Shows a preview of first 5 rows before continuing
+    // Updates progress bar during batch inserts
+    // Inserts any remaining rows after loop finishes
     let mode: (String,) = sqlx::query_as("PRAGMA journal_mode = OFF;")
         .fetch_one(&mut *conn)
         .await?;
@@ -54,7 +59,6 @@ pub async fn init_insert_process(
                     sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
                         .await?;
                     chunk.clear();
-
                 }
             }
             Err(e) => {
@@ -69,7 +73,11 @@ pub async fn init_insert_process(
 
     if !chunk.is_empty() {
         sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
-        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
+        progress_bar.finish_with_message(format!(
+            "{} {} Rows processed",
+            "✅ [DONE]".green().bold(),
+            &lines_count
+        ));
         chunk.clear();
     }
 

@@ -8,6 +8,8 @@ pub async fn create_fts5_table(
     table_name: &String,
     column_count: i32,
 ) -> Result<Vec<String>, Box<dyn Error>> {
+    // Creates a virtual SQLite FTS5 table with specified number of columns using unicode61 tokenizer
+    // Returns the generated column names
     let column_names: Vec<String> = (0..column_count).map(|i| format!("c{}", i)).collect();
     let column_definitions_str = column_names.join(", ");
 
@@ -32,6 +34,7 @@ pub async fn delete_exists_table(
     conn: &mut SqliteConnection,
     table_name: &String,
 ) -> Result<(), Box<dyn Error>> {
+    // Drops the specified SQLite table if it exists, cleaning up before new creation
     let delete_sql = format!("DROP TABLE IF EXISTS \"{}\"", table_name);
 
     sqlx::query(&delete_sql)
@@ -54,6 +57,11 @@ pub async fn insert_chunk_to_sqlite(
     columns: &Vec<String>,
     chunk: &Vec<Vec<String>>,
 ) -> Result<(), Box<dyn Error>> {
+    // Inserts a batch of rows into a SQLite table using a parameterized query
+    // Sanitizes the table name to prevent injection or invalid names
+    // Truncates each field to max 255 characters before binding
+    // Builds a single multi-row INSERT statement with placeholders and binds all values
+    // Executes the query asynchronously and returns the result
     if chunk.is_empty() {
         println!("[insert] Empty chunk");
         return Ok(());
@@ -98,6 +106,7 @@ pub async fn insert_chunk_to_sqlite(
 }
 
 async fn truncate_field_string_owned(input: &str) -> String {
+    // Truncates a string to 255 Unicode characters safely
     const MAX_CHARS: usize = 255;
 
     let mut char_iter = input.char_indices();
@@ -120,6 +129,7 @@ async fn truncate_field_string_owned(input: &str) -> String {
 }
 
 async fn sanitize_identifier(name: &str) -> String {
+    // Sanitizes a string to contain only alphanumeric characters and underscores for safe SQL identifiers
     name.chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect()

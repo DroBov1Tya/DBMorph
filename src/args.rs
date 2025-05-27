@@ -14,14 +14,19 @@ pub struct AppArgs {
     pub database_user: Option<String>,
     pub database_pass: Option<String>,
     pub drop_existing: bool,
+    pub headers_row: bool,
     pub batch_size: Option<u32>,
     pub input_file_type: Option<String>,
     pub threads: u32,
 }
 
 pub fn parse_args() -> AppArgs {
+    // Defines and parses command-line arguments for the application using clap.
+    // Configures options like input/output file paths, table name, encoding, delimiter,
+    // database connection details, batch size, thread count, and flags for processing behavior.
+    // Returns a structured object containing all parsed argument values.
     let matches = Command::new("DBMorph")
-        .version("v0.2.2-dev")
+        .version("v0.3.1-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -135,6 +140,14 @@ pub fn parse_args() -> AppArgs {
                 .help("If set, drops the target table if it already exists before inserting new data")
                 .required(false)
                 .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("headers_row")
+                .short('H')
+                .long("headers-row")
+                .help("Use first row as headers for document keys instead of default column names (c1, c2, ...)")
+                .required(false)
+                .action(ArgAction::SetTrue)
         )
         .arg(
             Arg::new("batch_size")
@@ -224,6 +237,8 @@ pub fn parse_args() -> AppArgs {
 
     let drop_existing = matches.get_flag("drop_existing");
 
+    let headers_row = matches.get_flag("headers_row");
+
     let batch_size = matches.get_one::<u32>("batch_size").copied();
 
     let input_file_type = matches
@@ -248,6 +263,7 @@ pub fn parse_args() -> AppArgs {
         database_user,
         database_pass,
         drop_existing,
+        headers_row,
         batch_size,
         input_file_type,
         threads,

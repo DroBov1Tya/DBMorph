@@ -9,6 +9,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 fn flatten_json(value: &Value, prefix: String, out: &mut HashMap<String, String>) {
+    // Recursively flattens a nested JSON structure into a flat map with dot-separated keys.
     match value {
         Value::Object(map) => {
             for (k, v) in map {
@@ -38,6 +39,7 @@ fn flatten_json(value: &Value, prefix: String, out: &mut HashMap<String, String>
 pub async fn read_json_lines_flat<P: AsRef<Path>>(
     path: P,
 ) -> impl Stream<Item = Result<BTreeMap<String, String>, String>> {
+    // Reads a JSON Lines file asynchronously, flattens each JSON object, and returns them as a stream of ordered maps.
     let file = match File::open(path).await {
         Ok(f) => f,
         Err(e) => {
@@ -71,6 +73,7 @@ pub async fn read_json_lines_flat<P: AsRef<Path>>(
 }
 
 pub async fn count_keys_in_first_json<P: AsRef<std::path::Path>>(path: P) -> Result<i32, String> {
+    // Reads the first JSON line from a file, flattens it, and returns the number of keys found.
     let mut stream = read_json_lines_flat(path).await;
 
     if let Some(result) = stream.next().await {
@@ -84,6 +87,7 @@ pub async fn count_keys_in_first_json<P: AsRef<std::path::Path>>(path: P) -> Res
 }
 
 pub async fn count_objects_with_keys<P: AsRef<Path>>(path: P) -> Result<u32, String> {
+    // Counts the number of non-empty flattened JSON objects in a JSON Lines file.
     let mut stream = read_json_lines_flat(path).await;
     let mut count = 0;
 

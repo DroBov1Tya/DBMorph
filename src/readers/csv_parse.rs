@@ -15,6 +15,8 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
     delimiter: u8,
     remove_rows: Option<usize>,
 ) -> Result<impl Iterator<Item = Result<StringRecord, Box<dyn Error>>>, Box<dyn Error>> {
+    // Reads a CSV file with specified encoding and delimiter, optionally skipping a number of rows.
+    // Returns an iterator over the parsed CSV records as `StringRecord`.
     let path_ref = csv_file.as_ref();
 
     let file = File::open(path_ref)
@@ -29,10 +31,9 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
 
     let mut csv_reader = ReaderBuilder::new()
         .delimiter(delimiter)
-        .has_headers(true)
+        .has_headers(false)
         .flexible(true)
         .from_reader(decoding_reader);
-
 
     if let Some(skip_rows) = remove_rows {
         for _ in 0..skip_rows {
@@ -53,7 +54,11 @@ pub async fn check_max_collumns<P: AsRef<Path>>(
     delimiter: u8,
     remove_rows: Option<usize>,
 ) -> Result<i32, Box<dyn Error>> {
-    let mut all_rows = csv_row_reader(csv_file, encoding, delimiter, remove_rows).await.unwrap();
+    // Reads the first CSV row and prints the number of columns detected.
+    // Returns the column count as i32, or an error if the file is empty.
+    let mut all_rows = csv_row_reader(csv_file, encoding, delimiter, remove_rows)
+        .await
+        .unwrap();
     if let Some(result) = all_rows.next() {
         let record = result?;
         let columns_count = record.len();
@@ -71,7 +76,11 @@ pub async fn check_max_collumns<P: AsRef<Path>>(
     }
 }
 
-pub async fn count_lines<P: AsRef<Path>>(path: P, remove_rows: Option<usize>) -> Result<usize, Box<dyn Error>> {
+pub async fn count_lines<P: AsRef<Path>>(
+    path: P,
+    remove_rows: Option<usize>,
+) -> Result<usize, Box<dyn Error>> {
+    // Counts the number of lines in a file, optionally skipping a given number of initial rows.
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let lines = reader.lines();

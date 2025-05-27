@@ -2,9 +2,9 @@ use colored::*;
 use futures::stream::Stream;
 use futures::StreamExt;
 use sqlx::SqliteConnection;
-use tracing_subscriber::fmt::format;
 use std::collections::BTreeMap;
 use std::error::Error;
+use tracing_subscriber::fmt::format;
 
 use super::sqlite_init;
 use crate::utils::cli_prompt::process_and_pause;
@@ -18,6 +18,12 @@ pub async fn processing_json(
     batch_size: Option<u32>,
     total_rows: u32,
 ) -> Result<(), Box<dyn Error>> {
+    // Reads JSON objects from a stream and converts them into rows for SQLite insertion
+    // Collects rows into batches and inserts them into SQLite in chunks
+    // Shows a preview of the first 5 rows before continuing
+    // Updates progress bar as rows are processed
+    // Handles errors in JSON stream gracefully
+    // Inserts any leftover rows after stream ends and finishes progress bar
     let max_chunk_size = batch_size.unwrap_or(1000);
     let preview_count = 5;
     let mut chunk: Vec<Vec<String>> = Vec::new();
@@ -52,7 +58,11 @@ pub async fn processing_json(
         }
     }
     if !chunk.is_empty() {
-        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
+        progress_bar.finish_with_message(format!(
+            "{} {} Rows processed",
+            "✅ [DONE]".green().bold(),
+            &lines_count
+        ));
         let _ = sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
         chunk.clear();
     }

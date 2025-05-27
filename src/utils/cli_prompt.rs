@@ -7,6 +7,9 @@ use super::output_format;
 pub async fn process_and_pause(
     preview: Vec<Vec<String>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    /// Displays a preview of up to 5 records in CSV format,
+    /// then repeatedly prompts the user to confirm continuation:
+    /// accepts "y" or Enter to proceed, "n" to exit, and loops on invalid input.
     let mut first_records: Vec<Vec<String>> = Vec::new();
 
     for record in preview.iter().take(5) {
@@ -53,6 +56,9 @@ pub async fn process_and_pause(
 pub async fn select_table(
     database_tables: &BTreeSet<String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    /// Displays a numbered list of table names from the given set,
+    /// prompts the user to select a table by entering its number,
+    /// then returns the chosen table name or an error string if invalid.
     let mut index_table_map: HashMap<usize, String> = HashMap::new();
 
     println!(

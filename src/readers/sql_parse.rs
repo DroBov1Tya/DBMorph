@@ -15,6 +15,7 @@ pub async fn parse_table_rows<'a>(
     table_name: &'a str,
     encoding: &'a str,
 ) -> impl Stream<Item = Vec<String>> + Send + 'a {
+    // Parses SQL INSERT statements from a file, extracting rows for a specific table as vectors of strings.
     stream! {
         let file = File::open(file_path).expect("failed to open file");
 
@@ -81,6 +82,7 @@ pub async fn parse_table_rows<'a>(
 }
 
 pub async fn extract_table_names(file_path: &String) -> Result<String, Box<dyn Error>> {
+    // Scans a file for SQL INSERT statements to collect unique table names, then prompts the user to select one.
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
 
@@ -108,6 +110,7 @@ pub async fn count_rows_in_table(
     file_path: &String,
     target_table: &String,
 ) -> Result<u32, Box<dyn Error>> {
+    // Counts the number of rows inserted into a specific table by parsing SQL INSERT statements in a file.
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
 
@@ -162,6 +165,8 @@ pub async fn count_columns_in_first_row(
     file_path: &str,
     target_table: &str,
 ) -> Result<i32, Box<dyn Error>> {
+    /// Counts the number of columns in the first INSERT row for the given table
+    /// by parsing the SQL dump file until the first VALUES tuple is found.
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
 

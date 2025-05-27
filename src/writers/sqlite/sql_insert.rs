@@ -1,8 +1,8 @@
-use std::error::Error;
-use sqlx::{SqliteConnection};
 use colored::*;
 use futures::pin_mut;
 use futures::StreamExt;
+use sqlx::SqliteConnection;
+use std::error::Error;
 
 use crate::readers::sql_parse;
 use crate::utils::cli_prompt::process_and_pause;
@@ -19,6 +19,12 @@ pub async fn init_sql(
     batch_size: Option<u32>,
     total_rows: u32,
 ) -> Result<(), Box<dyn Error>> {
+    // Sets SQLite PRAGMA options for faster inserts
+    // Parses rows from a file into a stream with specified encoding
+    // Collects rows into batches and inserts them into SQLite table in chunks
+    // Shows a preview of the first 5 rows before continuing
+    // Updates progress bar while processing rows
+    // Inserts any remaining rows after stream ends and finishes progress bar
     let mode: (String,) = sqlx::query_as("PRAGMA journal_mode = OFF;")
         .fetch_one(&mut *conn)
         .await?;
@@ -56,13 +62,16 @@ pub async fn init_sql(
         if chunk.len() as u32 >= max_chunk_size {
             progress_bar.set_position(lines_count);
             let _ =
-                sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk)
-                    .await?;
+                sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
             chunk.clear();
         }
     }
     if !chunk.is_empty() {
-        progress_bar.finish_with_message(format!("{} {} Rows processed", "✅ [DONE]".green().bold(), &lines_count));
+        progress_bar.finish_with_message(format!(
+            "{} {} Rows processed",
+            "✅ [DONE]".green().bold(),
+            &lines_count
+        ));
         let _ = sqlite_init::insert_chunk_to_sqlite(conn, &table_name, &columns, &chunk).await?;
         chunk.clear();
     }

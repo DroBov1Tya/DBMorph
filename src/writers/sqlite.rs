@@ -22,6 +22,13 @@ pub async fn sqlite_processing(
     batch_size: Option<u32>,
     input_file_type: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
+    // Checks batch size limit and exits if exceeded
+    // Determines input file extension from argument or filename
+    // Connects to SQLite database, creating it if missing
+    // Optionally drops existing table if specified
+    // Detects or uses provided file encoding
+    // Based on file extension, parses and processes data:
+    // Warns if file type is unsupported
     if let Some(size) = batch_size {
         if size > 1000 {
             warn!(
@@ -83,10 +90,14 @@ pub async fn sqlite_processing(
     match extension.as_str() {
         "csv" | "txt" => {
             let lines_count = readers::csv_parse::count_lines(&input_file, remove_rows).await?;
-            let column_count =
-                readers::csv_parse::check_max_collumns(&input_file, &encoding, delimiter.unwrap(), remove_rows)
-                    .await
-                    .unwrap_or(column_count);
+            let column_count = readers::csv_parse::check_max_collumns(
+                &input_file,
+                &encoding,
+                delimiter.unwrap(),
+                remove_rows,
+            )
+            .await
+            .unwrap_or(column_count);
 
             let columns =
                 sqlite_init::create_fts5_table(&mut sqlite_conn, &table_name, column_count).await;
@@ -95,7 +106,7 @@ pub async fn sqlite_processing(
                 input_file.clone(),
                 &encoding,
                 delimiter.unwrap(),
-                remove_rows
+                remove_rows,
             )
             .await
             .unwrap();
@@ -149,7 +160,7 @@ pub async fn sqlite_processing(
                 columns.unwrap(),
                 encoding,
                 batch_size,
-                total_rows
+                total_rows,
             )
             .await?;
         }
