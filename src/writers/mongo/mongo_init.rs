@@ -14,7 +14,6 @@ pub async fn mongo_connect(
     // Parses client options and sets authentication credentials
     // Creates and returns a MongoDB client instance
     let conn = format!("mongodb://{}:{}@{}", db_user, db_pass, connection_uri);
-    println!("ConnString: {}", conn);
     let mut client_options = ClientOptions::parse(conn).await?;
 
     client_options.credential = Some(

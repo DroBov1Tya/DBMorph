@@ -9,6 +9,7 @@ pub struct AppArgs {
     pub encoding: Option<String>,
     pub delimiter: Option<u8>,
     pub remove_rows: Option<usize>,
+    pub custom_rows: Option<String>,
     pub database_type: String,
     pub database_url: Option<String>,
     pub database_user: Option<String>,
@@ -26,7 +27,7 @@ pub fn parse_args() -> AppArgs {
     // database connection details, batch size, thread count, and flags for processing behavior.
     // Returns a structured object containing all parsed argument values.
     let matches = Command::new("DBMorph")
-        .version("v0.3.1-dev")
+        .version("v0.3.3-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -95,6 +96,15 @@ pub fn parse_args() -> AppArgs {
                 .required(false)
                 .num_args(1)
                 .value_parser(clap::value_parser!(usize)),
+        )
+        .arg(
+            Arg::new("custom_rows")
+                .short('C')
+                .long("custom-rows")
+                .value_name("DATABASE_TYPE")
+                .help("Specifies the database type. Default: sqlite")
+                .required(false)
+                .num_args(1),
         )
         .arg(
             Arg::new("database_type")
@@ -212,6 +222,10 @@ pub fn parse_args() -> AppArgs {
 
     let remove_rows = matches.get_one::<usize>("remove_rows").copied();
 
+    let custom_rows: Option<String> = matches
+        .get_one::<String>("custom_rows")
+        .map(|r| r.to_string());
+
     let database_type: String = matches
         .get_one::<String>("database_type")
         .unwrap()
@@ -258,6 +272,7 @@ pub fn parse_args() -> AppArgs {
         encoding,
         delimiter,
         remove_rows,
+        custom_rows,
         database_type,
         database_url,
         database_user,

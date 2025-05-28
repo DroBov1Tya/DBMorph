@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let encoding = arg.encoding;
     let delimiter = arg.delimiter;
     let remove_rows = arg.remove_rows;
+    let custom_rows = arg.custom_rows;
     let batch_size = arg.batch_size;
     let drop_existing = arg.drop_existing;
     let headers_row = arg.headers_row;
@@ -53,6 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 encoding,
                 delimiter,
                 remove_rows,
+                custom_rows,
                 drop_existing,
                 batch_size,
                 input_file_type,
@@ -71,6 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 encoding,
                 delimiter,
                 remove_rows,
+                custom_rows,
                 drop_existing,
                 headers_row,
                 database_url,

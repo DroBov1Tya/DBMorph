@@ -63,7 +63,10 @@ pub async fn insert_chunk_to_sqlite(
     // Builds a single multi-row INSERT statement with placeholders and binds all values
     // Executes the query asynchronously and returns the result
     if chunk.is_empty() {
-        println!("[insert] Empty chunk");
+        println!(
+            "{}   No data to insert — empty chunk.",
+            "⚠️ [INSERT]".yellow().bold()
+        );
         return Ok(());
     }
 

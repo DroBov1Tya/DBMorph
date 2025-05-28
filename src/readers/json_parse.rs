@@ -2,6 +2,7 @@ use colored::*;
 use futures::stream::{self, Stream};
 use futures::StreamExt;
 use serde_json::Value;
+use tracing::error;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -95,7 +96,7 @@ pub async fn count_objects_with_keys<P: AsRef<Path>>(path: P) -> Result<u32, Str
         match result {
             Ok(map) if !map.is_empty() => count += 1,
             Ok(_) => {}
-            Err(err) => eprintln!("{} Error: {}", "🚫 [ERROR]".red().bold(), err),
+            Err(err) => error!("{} Error: {}", "🚫 [ERROR]".red().bold(), err),
         }
     }
 

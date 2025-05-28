@@ -18,6 +18,7 @@ pub async fn sqlite_processing(
     encoding: Option<String>,
     delimiter: Option<u8>,
     remove_rows: Option<usize>,
+    custom_rows: Option<String>,
     drop_existing: bool,
     batch_size: Option<u32>,
     input_file_type: Option<String>,

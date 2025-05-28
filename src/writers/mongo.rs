@@ -7,6 +7,7 @@ use tracing::{error, info, warn};
 use crate::{readers, transform};
 mod csv_insert;
 mod mongo_init;
+mod mongo_utils;
 mod sqlite_insert;
 
 pub async fn mongodb_processing(
@@ -17,6 +18,7 @@ pub async fn mongodb_processing(
     encoding: Option<String>,
     delimiter: Option<u8>,
     remove_rows: Option<usize>,
+    custom_rows: Option<String>,
     drop_existing: bool,
     headers_row: bool,
     database_url: Option<String>,
@@ -101,11 +103,12 @@ pub async fn mongodb_processing(
             .unwrap();
 
             let _start_process = csv_insert::init_insert_to_mongo(
-                &collection,
+                collection,
                 batch_size,
                 all_rows,
                 lines_count,
                 headers_row,
+                custom_rows,
             )
             .await?;
         }
@@ -139,6 +142,7 @@ pub async fn mongodb_processing(
                 reader,
                 total_rows,
                 headers_row,
+                custom_rows,
             )
             .await?;
         }

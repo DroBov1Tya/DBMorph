@@ -1,12 +1,13 @@
 use colored::*;
 use futures::{Stream, StreamExt};
 use mongodb::{
-    bson::{Bson, Document},
-    Collection,
+    bson::{doc, Bson, Document}, options::IndexOptions, Collection, IndexModel
 };
+use tracing::error;
 use std::{error::Error, pin::Pin};
 
 use crate::utils;
+use super::mongo_utils;
 
 pub async fn insert_stream_to_mongo<'a>(
     collection: &Collection<Document>,
@@ -16,6 +17,7 @@ pub async fn insert_stream_to_mongo<'a>(
     >,
     total_rows: i64,
     headers_row: bool,
+    custom_rows: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     let preview_count = 5;
     let batch_size = batch_size.unwrap().try_into().unwrap_or(100);
@@ -23,21 +25,33 @@ pub async fn insert_stream_to_mongo<'a>(
     let mut lines_count = 0usize;
     let mut preview_chunk: Vec<Vec<String>> = Vec::new();
 
+    let index_model = IndexModel::builder()
+    .keys(doc! { "_flat": "text" }) // указываем текстовый индекс по полю "_flat"
+    .options(Some(IndexOptions::builder().name(Some("flat_text_index".to_string())).build()))
+    .build();
+
+    collection.create_index(index_model).await?;
+
     let progress_bar = utils::output_format::init_progress_bar(total_rows as u64).await?;
 
     let columns: Vec<String> = if headers_row {
         match StreamExt::next(&mut reader).await {
             Some(Ok(header)) => header,
             Some(Err(e)) => {
-                eprintln!(
-                    "{} Failed to read header row: {}",
-                    "🚫 [ERROR]".red().bold(),
+                error!("Failed to read header row: {}", e);
+                println!(
+                    "{}   Failed to read header row: {}",
+                    "🚫 [CSV]".red().bold(),
                     e
                 );
                 return Err("Header parse error".into());
             }
             None => {
-                eprintln!("{} No rows in stream", "🚫 [ERROR]".red().bold());
+                error!("No rows in stream – possible empty or corrupted file");
+                println!(
+                    "{}   No rows found in input stream.",
+                    "🚫 [CSV]".red().bold()
+                );
                 return Err("Empty stream".into());
             }
         }
@@ -46,6 +60,19 @@ pub async fn insert_stream_to_mongo<'a>(
     };
 
     let mut chunk: Vec<Document> = Vec::with_capacity(batch_size);
+
+    match custom_rows {
+        Some(row) => {
+            let vec: Vec<String> = row.split(' ')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+            preview_chunk.push(vec);
+        },
+        _ => {
+
+        },
+    };
 
     while let Some(row_res) = StreamExt::next(&mut reader).await {
         match row_res {
@@ -58,7 +85,7 @@ pub async fn insert_stream_to_mongo<'a>(
                     }
                 }
 
-                let doc = if headers_row {
+                let mut doc = if headers_row {
                     let mut doc = Document::new();
                     for (col, val) in columns.iter().zip(row.iter()) {
                         doc.insert(col, Bson::String(val.clone()));
@@ -72,6 +99,9 @@ pub async fn insert_stream_to_mongo<'a>(
                     }
                     doc
                 };
+
+                let flat_str = mongo_utils::flatten_bson(&doc).await;
+                let _ = doc.insert("_flat", Bson::String(flat_str));
 
                 chunk.push(doc);
                 lines_count += 1;

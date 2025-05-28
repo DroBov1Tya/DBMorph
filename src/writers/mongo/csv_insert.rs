@@ -1,21 +1,24 @@
 use colored::*;
 use csv::StringRecord;
 use mongodb::{
-    bson::{doc, Bson, Document},
-    Collection,
+    bson::{doc, Bson, Document}, options::IndexOptions, Collection, IndexModel
 };
+use std::collections::HashMap;
 use std::error::Error;
+use tokio::task;
 use tracing::{error, info, warn};
 
+use super::mongo_utils;
 use crate::utils::cli_prompt::process_and_pause;
 use crate::utils::output_format;
 
 pub async fn init_insert_to_mongo(
-    collection: &Collection<Document>,
+    collection: Collection<Document>,
     batch_size: Option<u32>,
     mut all_rows: impl Iterator<Item = Result<StringRecord, Box<dyn std::error::Error>>>,
     total_rows: usize,
     headers_row: bool,
+    custom_rows: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     // Reads CSV rows, shows a preview of first few rows with pause for confirmation
     // Converts rows into MongoDB documents, using headers as field names if available
@@ -27,12 +30,23 @@ pub async fn init_insert_to_mongo(
     let mut lines_count = 0;
     let mut preview_chunk: Vec<Vec<String>> = Vec::new();
     let progress_bar = output_format::init_progress_bar(total_rows as u64).await?;
+    let mut tasks = Vec::new();
+
+    let index_model = IndexModel::builder()
+    .keys(doc! { "_flat": "text" }) // указываем текстовый индекс по полю "_flat"
+    .options(Some(IndexOptions::builder().name(Some("flat_text_index".to_string())).build()))
+    .build();
+
+    collection.create_index(index_model).await?;
 
     let columns: Vec<String> = if headers_row {
         match all_rows.next() {
             Some(Ok(header_record)) => header_record.iter().map(|s| s.to_string()).collect(),
             _ => {
-                error!("Не удалось считать заголовки из первой строки CSV.");
+                error!(
+                    "{}   Failed to parse headers from CSV – aborting.",
+                    "🚫 [ERROR]".red().bold()
+                );
                 return Err("Header parse error".into());
             }
         }
@@ -41,6 +55,19 @@ pub async fn init_insert_to_mongo(
     };
 
     let mut chunk: Vec<Document> = Vec::with_capacity(batch_size);
+
+    match custom_rows {
+        Some(row) => {
+            let vec: Vec<String> = row.split(' ')
+            .map(|s| s.trim().to_string())
+            .collect();
+
+            preview_chunk.push(vec);
+        },
+        _ => {
+            
+        },
+    };
 
     for row_result in all_rows {
         match row_result {
@@ -55,7 +82,7 @@ pub async fn init_insert_to_mongo(
                     }
                 }
 
-                let doc = if headers_row {
+                let mut doc = if headers_row {
                     let mut doc = Document::new();
                     for (col, val) in columns.iter().zip(record.iter()) {
                         doc.insert(col.clone(), Bson::String(val.to_string()));
@@ -70,21 +97,30 @@ pub async fn init_insert_to_mongo(
                     doc
                 };
 
+                let flat_str = mongo_utils::flatten_bson(&doc).await;
+                let _ = doc.insert("_flat", Bson::String(flat_str));
+
                 chunk.push(doc);
                 lines_count += 1;
 
                 if chunk.len() >= batch_size {
                     progress_bar.set_position(lines_count as u64);
+                    let collection = collection.clone();
                     let mut docs_to_insert = std::mem::take(&mut chunk);
-                    let result = collection
-                        .insert_many(std::mem::take(&mut docs_to_insert))
-                        .await;
+
+                    let task = task::spawn(async move {
+                        let result = collection
+                            .clone()
+                            .insert_many(std::mem::take(&mut docs_to_insert))
+                            .await;
+                    });
+                    tasks.push(task);
 
                     chunk.clear();
                 }
             }
             Err(e) => {
-                eprintln!(
+                error!(
                     "{}   Failed to read row from CSV: {}",
                     "🚫 [ERROR]".red().bold(),
                     e
@@ -94,16 +130,26 @@ pub async fn init_insert_to_mongo(
     }
 
     if !chunk.is_empty() {
+        let collection = collection.clone();
         let mut docs_to_insert = std::mem::take(&mut chunk);
-        let result = collection
-            .insert_many(std::mem::take(&mut docs_to_insert))
-            .await;
+
+        let task = task::spawn(async move {
+            let _result = collection
+                .clone()
+                .insert_many(std::mem::take(&mut docs_to_insert))
+                .await;
+        });
+        tasks.push(task);
 
         progress_bar.finish_with_message(format!(
             "{} {} Rows inserted into MongoDB",
             "✅ [DONE]".green().bold(),
             lines_count
         ));
+    }
+
+    for task in tasks {
+        let _ = task.await;
     }
 
     Ok(())
