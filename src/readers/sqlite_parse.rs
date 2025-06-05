@@ -7,7 +7,7 @@ use sqlx::{
 use std::{collections::BTreeMap, error::Error, str::FromStr};
 
 pub async fn init_connect(input_file: &String) -> Result<SqliteConnection, Box<dyn Error>> {
-    let db_path = format!("sqlite://{}.db", input_file);
+    let db_path = format!("sqlite://{}", input_file);
 
     println!(
         "{}   Connecting to sqlite database at: {}",

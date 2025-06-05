@@ -119,6 +119,7 @@ pub async fn sqlite_processing(
                 batch_size,
                 all_rows,
                 lines_count,
+                custom_rows,
             )
             .await;
         }

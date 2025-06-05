@@ -27,7 +27,7 @@ pub fn parse_args() -> AppArgs {
     // database connection details, batch size, thread count, and flags for processing behavior.
     // Returns a structured object containing all parsed argument values.
     let matches = Command::new("DBMorph")
-        .version("v0.3.3-dev")
+        .version("v0.3.4-dev")
         .author("DroBoV1tya")
         .about("A utility to parse data files and load them into an SQLite database.")
         .arg(
@@ -101,8 +101,8 @@ pub fn parse_args() -> AppArgs {
             Arg::new("custom_rows")
                 .short('C')
                 .long("custom-rows")
-                .value_name("DATABASE_TYPE")
-                .help("Specifies the database type. Default: sqlite")
+                .value_name("ID NAME ETC...")
+                .help("Space-separated list of custom column names to override headers or auto-generated keys (e.g., name email phone)")
                 .required(false)
                 .num_args(1),
         )

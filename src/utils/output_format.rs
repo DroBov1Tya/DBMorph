@@ -15,7 +15,7 @@ pub async fn started_text() {
 ██████╔╝██████╔╝██║ ╚═╝ ██║╚██████╔╝██║  ██║██║     ██║  ██║
 ╚═════╝ ╚═════╝ ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝
                                                             
-Version: v0.3.3-dev
+Version: v0.3.4-dev
     "#
         .green(),
         "by github.com/DroBov1Tya".bright_cyan().italic(),

@@ -1,17 +1,22 @@
 use colored::*;
 use futures::{Stream, StreamExt};
 use mongodb::{
-    bson::{doc, Bson, Document}, options::IndexOptions, Collection, IndexModel
+    bson::{doc, Bson, Document},
+    options::{Acknowledgment, IndexOptions, InsertManyOptions, WriteConcern},
+    Collection, IndexModel,
 };
-use tracing::error;
+use std::sync::Arc;
 use std::{error::Error, pin::Pin};
+use tokio::sync::Semaphore;
+use tracing::error;
 
-use crate::utils;
 use super::mongo_utils;
+use crate::utils;
 
 pub async fn insert_stream_to_mongo<'a>(
     collection: &Collection<Document>,
     batch_size: Option<u32>,
+    threads: u32,
     mut reader: Pin<
         Box<dyn Stream<Item = Result<Vec<String>, Box<dyn Error + Send + Sync>>> + Send + 'a>,
     >,
@@ -21,20 +26,14 @@ pub async fn insert_stream_to_mongo<'a>(
 ) -> Result<(), Box<dyn Error>> {
     let preview_count = 5;
     let batch_size = batch_size.unwrap().try_into().unwrap_or(100);
+    let semaphore = Arc::new(Semaphore::new(threads as usize));
     let mut preview_shown = false;
     let mut lines_count = 0usize;
     let mut preview_chunk: Vec<Vec<String>> = Vec::new();
 
-    let index_model = IndexModel::builder()
-    .keys(doc! { "_flat": "text" }) // указываем текстовый индекс по полю "_flat"
-    .options(Some(IndexOptions::builder().name(Some("flat_text_index".to_string())).build()))
-    .build();
-
-    collection.create_index(index_model).await?;
-
     let progress_bar = utils::output_format::init_progress_bar(total_rows as u64).await?;
 
-    let columns: Vec<String> = if headers_row {
+    let mut columns: Vec<String> = if headers_row {
         match StreamExt::next(&mut reader).await {
             Some(Ok(header)) => header,
             Some(Err(e)) => {
@@ -62,16 +61,12 @@ pub async fn insert_stream_to_mongo<'a>(
     let mut chunk: Vec<Document> = Vec::with_capacity(batch_size);
 
     match custom_rows {
-        Some(row) => {
-            let vec: Vec<String> = row.split(' ')
-            .map(|s| s.trim().to_string())
-            .collect();
+        Some(ref row) => {
+            let vec: Vec<String> = row.split(' ').map(|s| s.trim().to_string()).collect();
 
-            preview_chunk.push(vec);
-        },
-        _ => {
-
-        },
+            preview_chunk.push(vec.clone());
+        }
+        _ => {}
     };
 
     while let Some(row_res) = StreamExt::next(&mut reader).await {
@@ -85,17 +80,27 @@ pub async fn insert_stream_to_mongo<'a>(
                     }
                 }
 
+                match custom_rows {
+                    Some(ref row) => {
+                        let vec: Vec<String> =
+                            row.split(' ').map(|s| s.trim().to_string()).collect();
+
+                        columns = vec;
+                    }
+                    _ => {}
+                };
+
                 let mut doc = if headers_row {
                     let mut doc = Document::new();
                     for (col, val) in columns.iter().zip(row.iter()) {
-                        doc.insert(col, Bson::String(val.clone()));
+                        doc.insert(col.to_uppercase(), Bson::String(val.clone().to_uppercase()));
                     }
                     doc
                 } else {
                     let mut doc = Document::new();
                     for (i, val) in row.iter().enumerate() {
                         let key = format!("c{}", i + 1);
-                        doc.insert(key, Bson::String(val.clone()));
+                        doc.insert(key.to_uppercase(), Bson::String(val.clone().to_uppercase()));
                     }
                     doc
                 };
@@ -107,8 +112,25 @@ pub async fn insert_stream_to_mongo<'a>(
                 lines_count += 1;
 
                 if chunk.len() >= batch_size {
+                    let permit = semaphore.clone().acquire_owned().await.unwrap();
                     progress_bar.set_position(lines_count as u64);
-                    collection.insert_many(std::mem::take(&mut chunk)).await?;
+                    let collection = collection.clone();
+                    let mut docs_to_insert = std::mem::take(&mut chunk);
+
+                    let _result = collection
+                        .clone()
+                        .insert_many(std::mem::take(&mut docs_to_insert))
+                        .await;
+
+                    // tokio::spawn(async move {
+                    //     let _result = collection
+                    //         .clone()
+                    //         .insert_many(std::mem::take(&mut docs_to_insert))
+                    //         .await;
+                    // });
+
+                    drop(permit);
+                    chunk.clear();
                 }
             }
             Err(e) => {
@@ -120,6 +142,8 @@ pub async fn insert_stream_to_mongo<'a>(
     if !chunk.is_empty() {
         collection.insert_many(std::mem::take(&mut chunk)).await?;
     }
+
+    chunk.clear();
 
     progress_bar.finish_with_message(format!(
         "{} {} Rows inserted into MongoDB",

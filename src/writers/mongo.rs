@@ -26,6 +26,7 @@ pub async fn mongodb_processing(
     database_pass: Option<String>,
     batch_size: Option<u32>,
     input_file_type: Option<String>,
+    threads: u32,
 ) -> Result<(), Box<dyn Error>> {
     // Connects to MongoDB with given credentials or exits if missing
     // Determines collection name from input file stem and extension
@@ -68,6 +69,11 @@ pub async fn mongodb_processing(
 
     if drop_existing == true {
         let _delete_exists_table = &collection.drop().await;
+        println!(
+            "{}   Existing table '{}' dropped",
+            "✅ [DB]".green().bold(),
+            table_name
+        );
     }
 
     let encoding = match encoding {
@@ -105,6 +111,7 @@ pub async fn mongodb_processing(
             let _start_process = csv_insert::init_insert_to_mongo(
                 collection,
                 batch_size,
+                threads,
                 all_rows,
                 lines_count,
                 headers_row,
@@ -128,7 +135,7 @@ pub async fn mongodb_processing(
                     .await?;
         }
         "db" | "sqlite" => {
-            let mut sqlite_conn = readers::sqlite_parse::init_connect(&output_file).await?;
+            let mut sqlite_conn = readers::sqlite_parse::init_connect(&input_file).await?;
 
             let total_rows =
                 readers::sqlite_parse::count_rows_in_table(&input_file, &table_name).await?;
@@ -139,6 +146,7 @@ pub async fn mongodb_processing(
             let _ = sqlite_insert::insert_stream_to_mongo(
                 &collection,
                 batch_size,
+                threads,
                 reader,
                 total_rows,
                 headers_row,

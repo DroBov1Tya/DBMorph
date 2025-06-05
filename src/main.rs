@@ -81,6 +81,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 database_pass,
                 batch_size,
                 input_file_type,
+                threads,
             )
             .await;
         }

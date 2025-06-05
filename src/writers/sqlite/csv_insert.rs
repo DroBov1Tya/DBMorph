@@ -14,6 +14,7 @@ pub async fn init_insert_process(
     batch_size: Option<u32>,
     all_rows: impl Iterator<Item = Result<StringRecord, Box<dyn std::error::Error>>>,
     total_rows: usize,
+    custom_rows: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     // Disables SQLite journaling and synchronous mode for faster inserts
     // Iterates over CSV rows, collects them in batches, and inserts into SQLite
@@ -40,6 +41,15 @@ pub async fn init_insert_process(
     let progress_bar = output_format::init_progress_bar(total_rows as u64).await?;
 
     let mut chunk: Vec<Vec<String>> = Vec::with_capacity(batch_size);
+
+    match custom_rows {
+        Some(row) => {
+            let vec: Vec<String> = row.split(' ').map(|s| s.trim().to_string()).collect();
+
+            chunk.push(vec);
+        }
+        _ => {}
+    };
 
     for row_result in all_rows {
         match row_result {

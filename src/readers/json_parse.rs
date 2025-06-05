@@ -2,12 +2,12 @@ use colored::*;
 use futures::stream::{self, Stream};
 use futures::StreamExt;
 use serde_json::Value;
-use tracing::error;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tracing::error;
 
 fn flatten_json(value: &Value, prefix: String, out: &mut HashMap<String, String>) {
     // Recursively flattens a nested JSON structure into a flat map with dot-separated keys.
