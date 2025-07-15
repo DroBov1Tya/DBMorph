@@ -4,7 +4,7 @@ use std::process;
 use std::{error::Error, str::FromStr};
 use tracing::{error, info, warn};
 
-use crate::{readers, transform};
+use crate::{readers, processors};
 mod csv_insert;
 mod json_insert;
 mod sql_insert;
@@ -79,7 +79,7 @@ pub async fn sqlite_processing(
 
     let encoding = match encoding {
         Some(enc) => enc,
-        _ => transform::encoding::detect_encoding(&input_file).unwrap(),
+        _ => processors::encoding::detect_encoding(&input_file).unwrap(),
     };
 
     println!(

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process;
 use tracing::{error, info, warn};
 
-use crate::{readers, transform};
+use crate::{readers, processors};
 mod csv_insert;
 mod mongo_init;
 mod mongo_utils;
@@ -78,7 +78,7 @@ pub async fn mongodb_processing(
 
     let encoding = match encoding {
         Some(enc) => enc,
-        _ => transform::encoding::detect_encoding(&input_file).unwrap(),
+        _ => processors::encoding::detect_encoding(&input_file).unwrap(),
     };
 
     println!(

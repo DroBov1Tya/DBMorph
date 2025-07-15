@@ -164,9 +164,9 @@ pub fn parse_args() -> AppArgs {
                 .short('s')
                 .long("batch-size")
                 .value_name("SIZE")
-                .help("Specifies the number of rows to insert in a single batch/transaction. Defaults to a predefined value if not set. Default value: 10000")
+                .help("Specifies the number of rows to insert in a single batch/transaction. Defaults to a predefined value if not set. Default value: 1000")
                 .required(false)
-                .default_value("10000")
+                .default_value("1000")
                 .num_args(1)
                 .value_parser(value_parser!(u32)),
         )

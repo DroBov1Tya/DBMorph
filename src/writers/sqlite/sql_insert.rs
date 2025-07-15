@@ -7,7 +7,7 @@ use std::error::Error;
 use crate::readers::sql_parse;
 use crate::utils::cli_prompt::process_and_pause;
 use crate::utils::output_format;
-use crate::writers::sqlite::sqlite_init;
+use super::sqlite_init;
 
 pub async fn init_sql(
     conn: &mut SqliteConnection,

@@ -63,8 +63,8 @@ pub async fn insert_stream_to_mongo<'a>(
     match custom_rows {
         Some(ref row) => {
             let vec: Vec<String> = row.split(' ').map(|s| s.trim().to_string()).collect();
-
             preview_chunk.push(vec.clone());
+            columns = vec;
         }
         _ => {}
     };
@@ -79,16 +79,6 @@ pub async fn insert_stream_to_mongo<'a>(
                         preview_shown = true;
                     }
                 }
-
-                match custom_rows {
-                    Some(ref row) => {
-                        let vec: Vec<String> =
-                            row.split(' ').map(|s| s.trim().to_string()).collect();
-
-                        columns = vec;
-                    }
-                    _ => {}
-                };
 
                 let mut doc = if headers_row {
                     let mut doc = Document::new();
