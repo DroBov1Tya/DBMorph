@@ -1,11 +1,11 @@
-use clap::builder::Str;
-use colored::Colorize;
-use std::collections::HashMap;
-use std::error::Error;
-use tokio::fs;
+use std::fs;
 
-pub async fn parse_dump_simple(file: String) -> Result<(), Box<dyn Error>> {
-    let content = fs::read_to_string(file.as_str()).await?;
+use anyhow::Result;
+
+use crate::app::utils::ui;
+
+pub async fn parse_dump_simple(file: String) -> Result<()> {
+    let content = fs::read_to_string(file.as_str())?;
 
     let mut databases = Vec::new();
     let mut tables = Vec::new();
@@ -13,7 +13,7 @@ pub async fn parse_dump_simple(file: String) -> Result<(), Box<dyn Error>> {
     for line in content.lines() {
         let line = line.trim();
 
-        if line.starts_with("--") || line.starts_with("#") || line.is_empty() {
+        if line.starts_with("--") || line.starts_with('#') || line.is_empty() {
             continue;
         }
 
@@ -32,29 +32,14 @@ pub async fn parse_dump_simple(file: String) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!(
-        "{}   Databases found: {}",
-        "✅ [DB]".green().bold(),
-        databases.len()
-    );
+    ui::field("databases", &databases.len().to_string());
     for db in &databases {
-        println!(" - {}", db);
+        ui::info(db);
     }
 
-    println!(
-        "{}   Tables discovered: {}",
-        "✅ [DB]".green().bold(),
-        tables.len()
-    );
+    ui::field("tables", &tables.len().to_string());
     for table in &tables {
-        println!(" - {}", table);
-    }
-
-    let rows = extract_insert_values(&file, "btc_addresses");
-
-    println!("{}   Rows found: {}", "✅ [DB]".green().bold(), rows.len());
-    for row in rows.iter().take(3) {
-        println!("{:?}", row);
+        ui::info(table);
     }
 
     Ok(())
@@ -79,6 +64,7 @@ fn extract_name_from_create(line: &str, keyword: &str) -> Option<String> {
     }
 }
 
+#[allow(dead_code)]
 pub fn extract_insert_values(sql: &str, table_name: &str) -> Vec<Vec<String>> {
     let mut result = Vec::new();
     let mut collecting = false;
@@ -87,7 +73,7 @@ pub fn extract_insert_values(sql: &str, table_name: &str) -> Vec<Vec<String>> {
     for line in sql.lines() {
         let trimmed = line.trim();
 
-        if !collecting && trimmed.starts_with(&format!("INSERT INTO `{}`", table_name)) {
+        if !collecting && trimmed.starts_with(&format!("INSERT INTO `{table_name}`")) {
             collecting = true;
             if let Some(idx) = trimmed.find("VALUES") {
                 buffer.push_str(&trimmed[idx + 6..]);
@@ -98,16 +84,13 @@ pub fn extract_insert_values(sql: &str, table_name: &str) -> Vec<Vec<String>> {
         if collecting {
             buffer.push_str(trimmed);
             if trimmed.ends_with(';') {
-                collecting = false;
                 break;
             }
         }
     }
 
-    // Удаляем завершающую точку с запятой
     let cleaned = buffer.trim_end_matches(';').trim();
 
-    // Разбиваем по "),(" границе между записями
     for row in cleaned.split("),(") {
         let row_clean = row.trim_start_matches('(').trim_end_matches(')').trim();
         let values = row_clean

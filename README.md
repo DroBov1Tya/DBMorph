@@ -1,16 +1,36 @@
-**DBMorph** — это высокопроизводительная утилита, написанная на Rust, предназначенная для быстрой и эффективной обработки больших текстовых файлов с данными (таких как CSV, TXT) и их загрузки в базы данных.
+# DBMorph
 
-Основная цель проекта — предоставить гибкий инструмент для ETL-задач (Extract, Transform, Load), который легко справляется с объемными наборами данных, минимизируя потребление памяти за счет потоковой обработки.
+**DBMorph** is a high-performance Rust utility designed for fast and efficient processing of large text data files (CSV, TXT, SQL dumps, etc.) and loading them into databases, including SQLite.
 
-**Ключевые возможности:**
+The main goal is to provide a flexible, scalable ETL (Extract, Transform, Load) tool capable of handling very large files by minimizing memory usage via streaming and advanced parsing techniques.
 
-*   **Скорость и эффективность:** Использование Rust обеспечивает отличную производительность и низкое потребление ресурсов.
-*   **Работа с большими файлами:** Потоковая обработка позволяет обрабатывать файлы, значительно превышающие объем доступной оперативной памяти.
-*   **Интеллектуальный парсинг:**
-    *   Автоматическое определение кодировки входных файлов.
-    *   Эвристическое определение символа-разделителя для CSV-подобных форматов.
-    *   Гибкая обработка CSV с переменным количеством колонок в строках.
-*   **Поддержка SQLite (текущая):** На данный момент реализована загрузка данных в SQLite с автоматическим созданием таблиц FTS5 для полнотекстового поиска.
-*   **Масштабируемая архитектура:** Проект изначально спроектирован с учетом будущего расширения для поддержки других популярных СУБД (например, PostgreSQL, MySQL, ClickHouse) и форматов данных.
+---
 
-ParseQLite стремится стать надежным и универсальным решением для разработчиков и аналитиков данных, которым необходимо быстро перемещать и структурировать большие объемы текстовой информации в базы данных для дальнейшего анализа и использования.
+## Key features
+
+- **Speed and efficiency**  
+  Rust ensures excellent performance and low resource consumption.
+
+- **Handling large files**  
+  Streaming parsing allows working with files significantly larger than available RAM.
+
+- **Intelligent parsing**  
+  - Automatic detection of input file encoding  
+  - Heuristic detection of delimiters in CSV-like formats  
+  - Support for variable column counts per row  
+  - Parsing SQL dumps with interactive table selection and data export
+
+- **Interactive CLI**  
+  Enables selecting tables from SQL dumps for export and previewing the first 5 rows before exporting.
+
+- **SQLite export**  
+  Automatic creation of tables with FTS5 full-text search support and data export.
+
+- **Scalability**  
+  Architecture designed for future support of other popular DBMS (PostgreSQL, MySQL, ClickHouse) and formats.
+
+---
+
+## About the project
+
+DBMorph aims to be a reliable and universal solution for developers and data analysts who need a fast, memory-efficient, and easy-to-use tool for moving and structuring large volumes of text data into databases for further analysis and usage.

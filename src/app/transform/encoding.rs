@@ -1,14 +1,17 @@
-use chardetng::EncodingDetector;
-use std::error::Error;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-pub fn detect_encoding<P: AsRef<Path>>(file_path: P) -> Result<String, Box<dyn Error>> {
-    let sample_size = 10000;
-    let f = File::open(file_path)?;
+use anyhow::{Context, Result};
+use chardetng::EncodingDetector;
+
+pub fn detect_encoding<P: AsRef<Path>>(file_path: P) -> Result<String> {
+    let sample_size = 10_000;
+    let path = file_path.as_ref();
+    let file = File::open(path).with_context(|| format!("failed to open {path:?}"))?;
+
     let mut buffer = Vec::with_capacity(sample_size);
-    f.take(sample_size as u64).read_to_end(&mut buffer)?;
+    file.take(sample_size as u64).read_to_end(&mut buffer)?;
 
     if buffer.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return Ok("utf-8".to_string());
@@ -20,6 +23,6 @@ pub fn detect_encoding<P: AsRef<Path>>(file_path: P) -> Result<String, Box<dyn E
 
     let mut detector = EncodingDetector::new();
     detector.feed(&buffer, true);
-    let encoding_guess = detector.guess(None, true);
-    Ok(encoding_guess.name().to_lowercase())
+    let guess = detector.guess(None, true);
+    Ok(guess.name().to_lowercase())
 }
