@@ -31,8 +31,9 @@ pub async fn parquet_processing(args: &AppArgs) -> Result<()> {
     match args.input_file_type.as_str() {
         "csv" | "txt" => csv_to_parquet(args, &out_path).await?,
         "json" | "jsonl" | "ndjson" => json_to_parquet(args, &out_path).await?,
+        "sql" | "dump" => sql_to_parquet(args, &out_path).await?,
         "sqlite" => sqlite_to_parquet(args, &out_path).await?,
-        other => bail!("Parquet output supports csv/txt/json/sqlite input, got: {other}"),
+        other => bail!("Parquet output supports csv/txt/json/sql/sqlite input, got: {other}"),
     }
 
     verify_output(&out_path)?;
@@ -82,6 +83,26 @@ async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<()> {
     let rows = data.into_iter().map(Ok);
 
     write_parquet(args, out_path, column_names, rows, Some(total)).await
+}
+
+async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<()> {
+    let wanted = if args.table_name == "main" {
+        None
+    } else {
+        Some(args.table_name.as_str())
+    };
+
+    let (source_table, headers) = readers::sql_parse::sql_dump_schema(&args.input_path, wanted)?;
+    ui::field("source table", &source_table);
+
+    let column_names = unique_column_names(&headers);
+    let rows = readers::sql_parse::sql_row_reader(
+        args.input_path.clone(),
+        source_table,
+        column_names.len(),
+    )?;
+
+    write_parquet(args, out_path, column_names, rows, None).await
 }
 
 async fn write_parquet(

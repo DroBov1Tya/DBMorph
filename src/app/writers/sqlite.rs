@@ -29,9 +29,7 @@ pub async fn sqlite_processing(args: &AppArgs) -> Result<()> {
         "csv" | "txt" => ingest_csv(&mut conn, args).await?,
         "parquet" => ingest_parquet(&mut conn, args).await?,
         "json" | "jsonl" | "ndjson" => ingest_json(&mut conn, args).await?,
-        "sql" => {
-            readers::sql_parse::parse_dump_simple(args.input_path.clone()).await?;
-        }
+        "sql" | "dump" => ingest_sql(&mut conn, args).await?,
         other => ui::warn(&format!("Unsupported input file type: {other}")),
     }
 
@@ -93,4 +91,29 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<(
         Some(total_rows as u64),
     )
     .await
+}
+
+async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<()> {
+    let wanted = if args.table_name == "main" {
+        None
+    } else {
+        Some(args.table_name.as_str())
+    };
+
+    let (source_table, headers) = readers::sql_parse::sql_dump_schema(&args.input_path, wanted)?;
+    ui::field("source table", &source_table);
+    ui::field("columns", &headers.len().to_string());
+
+    let dest_table = if args.table_name == "main" {
+        source_table.clone()
+    } else {
+        args.table_name.clone()
+    };
+
+    let columns = requests::create_fts5_table(conn, &dest_table, &headers).await?;
+
+    let rows =
+        readers::sql_parse::sql_row_reader(args.input_path.clone(), source_table, columns.len())?;
+
+    requests::init_insert_process(conn, &dest_table, columns, args.batch_size, rows, None).await
 }

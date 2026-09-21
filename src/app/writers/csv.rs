@@ -25,8 +25,9 @@ pub async fn csv_processing(args: &AppArgs) -> Result<()> {
         "parquet" => parquet_to_csv(args, &out_path).await?,
         "sqlite" => sqlite_to_csv(args, &out_path).await?,
         "json" | "jsonl" | "ndjson" => json_to_csv(args, &out_path).await?,
+        "sql" | "dump" => sql_to_csv(args, &out_path).await?,
         "csv" | "txt" => csv_to_csv(args, &out_path).await?,
-        other => bail!("CSV output supports parquet/sqlite/json/csv/txt input, got: {other}"),
+        other => bail!("CSV output supports parquet/sqlite/json/sql/csv/txt input, got: {other}"),
     }
 
     Ok(())
@@ -62,6 +63,22 @@ async fn json_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
     ui::field("columns", &headers.len().to_string());
 
     let rows = readers::json_parse::json_row_reader(args.input_path.clone(), headers.clone())?;
+    write_all(out_path, headers, args.delimiter, rows, None).await
+}
+
+async fn sql_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
+    let wanted = if args.table_name == "main" {
+        None
+    } else {
+        Some(args.table_name.as_str())
+    };
+
+    let (source_table, headers) = readers::sql_parse::sql_dump_schema(&args.input_path, wanted)?;
+    ui::field("source table", &source_table);
+    ui::field("columns", &headers.len().to_string());
+
+    let rows =
+        readers::sql_parse::sql_row_reader(args.input_path.clone(), source_table, headers.len())?;
     write_all(out_path, headers, args.delimiter, rows, None).await
 }
 
