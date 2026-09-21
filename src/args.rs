@@ -87,6 +87,23 @@ pub struct AppArgs {
     /// Treat the first csv/txt row as data, not column names
     #[arg(short = 'H', long = "no-header")]
     pub no_header: bool,
+
+    /// Truncate every field to N characters (0 = keep full value)
+    #[arg(long = "max-field", value_name = "N", default_value_t = 0)]
+    pub max_field: usize,
+
+    /// Abort on the first malformed row instead of skipping it
+    #[arg(short = 's', long = "strict")]
+    pub strict: bool,
+
+    /// Infer native Parquet column types (int/float/bool) instead of all-text
+    #[arg(long = "infer-types")]
+    pub infer_types: bool,
+
+    /// Disable csv/txt quote handling: every line break ends a row
+    /// (use for naive dumps where an unclosed quote would merge rows)
+    #[arg(long = "no-quote")]
+    pub no_quote: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

@@ -11,7 +11,7 @@ use crate::app::utils::ui;
 use crate::args;
 use crate::config;
 
-pub async fn run() -> Result<()> {
+pub async fn run() -> Result<u64> {
     let start = Instant::now();
     utils::logger::logger();
 
@@ -28,13 +28,16 @@ pub async fn run() -> Result<()> {
         ui::field("codec", &format!("{:?}", args.compression).to_lowercase());
     }
 
-    match args.database_type.as_str() {
+    let skipped = match args.database_type.as_str() {
         "sqlite" => writers::sqlite::sqlite_processing(&args).await?,
         "parquet" => writers::parquet::parquet_processing(&args).await?,
         "csv" => writers::csv::csv_processing(&args).await?,
-        other => ui::warn(&format!("Unknown target database: {other}")),
-    }
+        other => {
+            ui::warn(&format!("Unknown target database: {other}"));
+            0
+        }
+    };
 
     ui::total_time(&format!("{:.2?}", start.elapsed()));
-    Ok(())
+    Ok(skipped)
 }

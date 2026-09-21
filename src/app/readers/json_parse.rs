@@ -77,9 +77,8 @@ pub fn json_schema<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
     Ok(columns)
 }
 
-/// Streams rows aligned to `columns`: each object is projected onto the schema,
-/// missing keys become empty strings, scalars are stringified and nested
-/// objects/arrays are re-serialized as compact JSON.
+/// Streams rows aligned to `columns`: missing keys become empty, scalars are
+/// stringified, nested values re-serialized as compact JSON.
 pub fn json_row_reader<P: AsRef<Path>>(
     path: P,
     columns: Vec<String>,

@@ -14,6 +14,7 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
     delimiter: u8,
     encoding: &str,
     has_headers: bool,
+    quoting: bool,
 ) -> Result<impl Iterator<Item = Result<Vec<String>>>> {
     let path = csv_file.as_ref();
     let file = File::open(path).with_context(|| format!("failed to open CSV {path:?}"))?;
@@ -29,6 +30,7 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
         .delimiter(delimiter)
         .has_headers(has_headers)
         .flexible(true)
+        .quoting(quoting)
         .from_reader(decoding_reader);
 
     let iter = csv_reader.into_records().map(|res| {
@@ -44,14 +46,13 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
     Ok(iter)
 }
 
-/// Returns column names for the input. With a header row the real names are
-/// taken from the first line; otherwise synthetic `c0..cN` names are generated
-/// from the width of the first data row.
+/// Column names: header row when present, else synthetic `c0..cN`.
 pub async fn csv_headers<P: AsRef<Path>>(
     csv_file: P,
     delimiter: u8,
     encoding: &str,
     has_headers: bool,
+    quoting: bool,
 ) -> Result<Vec<String>> {
     let path = csv_file.as_ref();
     let file = File::open(path).with_context(|| format!("failed to open CSV {path:?}"))?;
@@ -67,6 +68,7 @@ pub async fn csv_headers<P: AsRef<Path>>(
         .delimiter(delimiter)
         .has_headers(false)
         .flexible(true)
+        .quoting(quoting)
         .from_reader(decoding_reader);
 
     let mut first = csv::StringRecord::new();

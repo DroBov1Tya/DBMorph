@@ -19,7 +19,7 @@ enum Token {
 }
 
 struct Tokenizer {
-    reader: BufReader<File>,
+    reader: Option<BufReader<File>>,
     pushed: Option<u8>,
     peeked: Option<Token>,
 }
@@ -29,22 +29,35 @@ impl Tokenizer {
         let path = path.as_ref();
         let file = File::open(path).with_context(|| format!("failed to open SQL dump {path:?}"))?;
         Ok(Self {
-            reader: BufReader::with_capacity(config::READ_BUFFER_BYTES, file),
+            reader: Some(BufReader::with_capacity(config::READ_BUFFER_BYTES, file)),
             pushed: None,
             peeked: None,
         })
+    }
+
+    /// A tokenizer with no backing file: yields EOF immediately.
+    fn empty() -> Self {
+        Self {
+            reader: None,
+            pushed: None,
+            peeked: None,
+        }
     }
 
     fn getb(&mut self) -> Result<Option<u8>> {
         if let Some(b) = self.pushed.take() {
             return Ok(Some(b));
         }
-        let chunk = self.reader.fill_buf()?;
+        let reader = match self.reader.as_mut() {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
             return Ok(None);
         }
         let b = chunk[0];
-        self.reader.consume(1);
+        reader.consume(1);
         Ok(Some(b))
     }
 
@@ -290,81 +303,6 @@ fn is_constraint_kw(word: &str) -> bool {
     )
 }
 
-/// Resolves the source table and its column names from a SQL dump.
-///
-/// Column names come from `CREATE TABLE` when present, otherwise from the
-/// `INSERT` column list, otherwise synthesized as `c0..cN` from the first
-/// tuple's arity. When `wanted` is `None` the first table with data wins.
-pub fn sql_dump_schema<P: AsRef<Path>>(
-    path: P,
-    wanted: Option<&str>,
-) -> Result<(String, Vec<String>)> {
-    let mut tok = Tokenizer::new(&path)?;
-    let mut create_cols: HashMap<String, Vec<String>> = HashMap::new();
-
-    while let Some(t) = tok.next_token()? {
-        let word = match &t {
-            Token::Word(w) => w.clone(),
-            _ => continue,
-        };
-
-        if word.eq_ignore_ascii_case("CREATE") {
-            let table = match read_create_table_name(&mut tok)? {
-                Some(name) => name,
-                None => continue,
-            };
-            if let Some(cols) = parse_create_body(&mut tok)?
-                && !cols.is_empty()
-            {
-                create_cols.insert(table.to_ascii_lowercase(), cols);
-            }
-            continue;
-        }
-
-        if word.eq_ignore_ascii_case("INSERT") {
-            match tok.next_token()? {
-                Some(Token::Word(w)) if w.eq_ignore_ascii_case("INTO") => {}
-                _ => continue,
-            }
-            let first = match tok.next_token()? {
-                Some(t) => t,
-                None => continue,
-            };
-            let table = tok.table_from_token(first)?;
-
-            let is_target = match wanted {
-                Some(w) => table.eq_ignore_ascii_case(w),
-                None => true,
-            };
-            if !is_target {
-                tok.skip_to_semi()?;
-                continue;
-            }
-
-            let collist = read_until_values(&mut tok)?;
-            let cols = create_cols
-                .get(&table.to_ascii_lowercase())
-                .cloned()
-                .or(collist)
-                .map(Ok)
-                .unwrap_or_else(|| synth_columns(&mut tok))?;
-
-            return Ok((table, cols));
-        }
-    }
-
-    if let Some(w) = wanted
-        && let Some(cols) = create_cols.get(&w.to_ascii_lowercase())
-    {
-        return Ok((w.to_string(), cols.clone()));
-    }
-    if let Some((table, cols)) = create_cols.into_iter().next() {
-        return Ok((table, cols));
-    }
-
-    bail!("no INSERT or CREATE TABLE statement found in SQL dump");
-}
-
 fn read_create_table_name(tok: &mut Tokenizer) -> Result<Option<String>> {
     match tok.next_token()? {
         Some(Token::Word(w)) if w.eq_ignore_ascii_case("TABLE") => {}
@@ -454,64 +392,127 @@ fn read_until_values(tok: &mut Tokenizer) -> Result<Option<Vec<String>>> {
     Ok(collist)
 }
 
-fn synth_columns(tok: &mut Tokenizer) -> Result<Vec<String>> {
+/// Opens a SQL dump in a single pass: resolves the source table and its columns,
+/// then returns an iterator positioned to stream that table's rows.
+pub fn sql_open<P: AsRef<Path>>(
+    path: P,
+    wanted: Option<&str>,
+) -> Result<(String, Vec<String>, SqlRowIter)> {
+    let mut tok = Tokenizer::new(&path)?;
+    let mut create_cols: HashMap<String, Vec<String>> = HashMap::new();
+
+    while let Some(t) = tok.next_token()? {
+        let word = match &t {
+            Token::Word(w) => w.clone(),
+            _ => continue,
+        };
+
+        if word.eq_ignore_ascii_case("CREATE") {
+            let table = match read_create_table_name(&mut tok)? {
+                Some(name) => name,
+                None => continue,
+            };
+            if let Some(cols) = parse_create_body(&mut tok)?
+                && !cols.is_empty()
+            {
+                create_cols.insert(table.to_ascii_lowercase(), cols);
+            }
+            continue;
+        }
+
+        if word.eq_ignore_ascii_case("INSERT") {
+            match tok.next_token()? {
+                Some(Token::Word(w)) if w.eq_ignore_ascii_case("INTO") => {}
+                _ => continue,
+            }
+            let first = match tok.next_token()? {
+                Some(t) => t,
+                None => continue,
+            };
+            let table = tok.table_from_token(first)?;
+
+            let is_target = match wanted {
+                Some(w) => table.eq_ignore_ascii_case(w),
+                None => true,
+            };
+            if !is_target {
+                tok.skip_to_semi()?;
+                continue;
+            }
+
+            let collist = read_until_values(&mut tok)?;
+
+            let known = create_cols
+                .get(&table.to_ascii_lowercase())
+                .cloned()
+                .or(collist);
+
+            let (columns, pending) = match known {
+                Some(cols) => (cols, None),
+                None => {
+                    let first_row = read_first_tuple(&mut tok)?;
+                    let cols = (0..first_row.len()).map(|i| format!("c{i}")).collect();
+                    (cols, Some(first_row))
+                }
+            };
+
+            let iter = SqlRowIter {
+                tok,
+                target: table.clone(),
+                in_values: true,
+                pending,
+            };
+            return Ok((table, columns, iter));
+        }
+    }
+
+    if let Some(w) = wanted
+        && let Some(cols) = create_cols.get(&w.to_ascii_lowercase())
+    {
+        return Ok((
+            w.to_string(),
+            cols.clone(),
+            SqlRowIter::empty(w.to_string()),
+        ));
+    }
+    if let Some((table, cols)) = create_cols.into_iter().next() {
+        return Ok((table.clone(), cols, SqlRowIter::empty(table)));
+    }
+
+    bail!("no INSERT or CREATE TABLE statement found in SQL dump");
+}
+
+/// Reads one VALUES tuple at its true width, opening `(` not yet consumed.
+fn read_first_tuple(tok: &mut Tokenizer) -> Result<Vec<String>> {
     loop {
         match tok.next_token()? {
             Some(Token::LParen) => break,
-            Some(Token::Semi) | None => bail!("no VALUES tuple found to infer column count"),
+            Some(Token::Semi) | None => bail!("no VALUES tuple found to infer columns"),
             _ => continue,
         }
     }
-
-    let mut count = 0usize;
-    let mut depth = 1usize;
-    let mut seen_any = false;
-
-    while let Some(t) = tok.next_token()? {
-        match t {
-            Token::LParen => depth += 1,
-            Token::RParen => {
-                depth -= 1;
-                if depth == 0 {
-                    if seen_any {
-                        count += 1;
-                    }
-                    break;
-                }
-            }
-            Token::Comma if depth == 1 => count += 1,
-            _ => seen_any = true,
-        }
-    }
-
-    if count == 0 {
-        bail!("VALUES tuple has no columns");
-    }
-    Ok((0..count).map(|i| format!("c{i}")).collect())
+    read_tuple_fields(tok)
 }
 
-/// Streaming row reader for `INSERT INTO <table> VALUES (...)` statements.
-pub fn sql_row_reader<P: AsRef<Path>>(
-    path: P,
-    table: String,
-    col_count: usize,
-) -> Result<SqlRowIter> {
-    Ok(SqlRowIter {
-        tok: Tokenizer::new(&path)?,
-        target: table,
-        col_count,
-        in_values: false,
-    })
-}
-
+/// Streaming reader over `INSERT INTO <target> VALUES (...)` tuples; `pending`
+/// holds a first tuple consumed early to infer the schema.
 pub struct SqlRowIter {
     tok: Tokenizer,
     target: String,
-    col_count: usize,
     in_values: bool,
+    pending: Option<Vec<String>>,
 }
 
 impl SqlRowIter {
+    fn empty(target: String) -> Self {
+        SqlRowIter {
+            tok: Tokenizer::empty(),
+            target,
+            in_values: false,
+            pending: None,
+        }
+    }
+
     fn enter_values_if_target(&mut self) -> Result<()> {
         match self.tok.next_token()? {
             Some(Token::Word(w)) if w.eq_ignore_ascii_case("INTO") => {}
@@ -538,45 +539,40 @@ impl SqlRowIter {
             }
         }
     }
+}
 
-    fn read_tuple(&mut self) -> Result<Vec<String>> {
-        let mut fields: Vec<String> = Vec::with_capacity(self.col_count);
-        let mut cur: Vec<Token> = Vec::new();
-        let mut depth = 1usize;
+/// Reads one VALUES tuple at its true field width, opening `(` already consumed.
+fn read_tuple_fields(tok: &mut Tokenizer) -> Result<Vec<String>> {
+    let mut fields: Vec<String> = Vec::new();
+    let mut cur: Vec<Token> = Vec::new();
+    let mut depth = 1usize;
 
-        loop {
-            let t = self
-                .tok
-                .next_token()?
-                .ok_or_else(|| anyhow!("unexpected EOF inside VALUES tuple"))?;
-            match t {
-                Token::LParen => {
-                    depth += 1;
-                    cur.push(Token::LParen);
-                }
-                Token::RParen => {
-                    if depth == 1 {
-                        fields.push(finalize_field(&cur));
-                        break;
-                    }
-                    depth -= 1;
-                    cur.push(Token::RParen);
-                }
-                Token::Comma if depth == 1 => {
-                    fields.push(finalize_field(&cur));
-                    cur.clear();
-                }
-                other => cur.push(other),
+    loop {
+        let t = tok
+            .next_token()?
+            .ok_or_else(|| anyhow!("unexpected EOF inside VALUES tuple"))?;
+        match t {
+            Token::LParen => {
+                depth += 1;
+                cur.push(Token::LParen);
             }
+            Token::RParen => {
+                if depth == 1 {
+                    fields.push(finalize_field(&cur));
+                    break;
+                }
+                depth -= 1;
+                cur.push(Token::RParen);
+            }
+            Token::Comma if depth == 1 => {
+                fields.push(finalize_field(&cur));
+                cur.clear();
+            }
+            other => cur.push(other),
         }
-
-        if fields.len() < self.col_count {
-            fields.resize(self.col_count, String::new());
-        } else if fields.len() > self.col_count {
-            fields.truncate(self.col_count);
-        }
-        Ok(fields)
     }
+
+    Ok(fields)
 }
 
 fn finalize_field(tokens: &[Token]) -> String {
@@ -614,13 +610,16 @@ impl Iterator for SqlRowIter {
     type Item = Result<Vec<String>>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(row) = self.pending.take() {
+            return Some(Ok(row));
+        }
         loop {
             if self.in_values {
                 match self.tok.next_token() {
                     Err(e) => return Some(Err(e)),
                     Ok(None) => return None,
                     Ok(Some(t)) => match t {
-                        Token::LParen => return Some(self.read_tuple()),
+                        Token::LParen => return Some(read_tuple_fields(&mut self.tok)),
                         Token::Comma => continue,
                         Token::Semi => {
                             self.in_values = false;

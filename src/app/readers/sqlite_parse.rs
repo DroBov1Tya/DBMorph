@@ -1,9 +1,12 @@
 use std::str::FromStr;
+use std::sync::mpsc::{Receiver, sync_channel};
 
 use anyhow::{Result, bail};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
+
+use crate::config;
 
 async fn connect(db_file: &str) -> Result<SqliteConnection> {
     let path = if db_file.ends_with(".db") {
@@ -64,16 +67,53 @@ async fn row_count(conn: &mut SqliteConnection, table: &str) -> Result<u64> {
     Ok(count.0.max(0) as u64)
 }
 
-/// Reads a SQLite table fully into memory as string rows, preserving the real
-/// schema column names as the returned header.
-pub async fn read_table(
-    db_file: &str,
-    requested_table: &str,
-) -> Result<(String, Vec<String>, Vec<Vec<String>>)> {
+/// Resolves the real table name, schema columns and row count without reading data.
+pub async fn schema(db_file: &str, requested_table: &str) -> Result<(String, Vec<String>, u64)> {
     let mut conn = connect(db_file).await?;
     let table = resolve_table(&mut conn, requested_table).await?;
     let columns = column_names(&mut conn, &table).await?;
     let total = row_count(&mut conn, &table).await?;
+    Ok((table, columns, total))
+}
+
+/// Streams a SQLite table as string rows without materializing it: a dedicated
+/// thread drives the async query and feeds a bounded channel read synchronously.
+pub fn stream_rows(
+    db_file: String,
+    table: String,
+    columns: Vec<String>,
+) -> impl Iterator<Item = Result<Vec<String>>> {
+    let (tx, rx) = sync_channel::<Result<Vec<String>>>(config::SQLITE_STREAM_CHANNEL);
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                let _ = tx.send(Err(e.into()));
+                return;
+            }
+        };
+
+        rt.block_on(async move {
+            if let Err(e) = pump(&db_file, &table, &columns, &tx).await {
+                let _ = tx.send(Err(e));
+            }
+        });
+    });
+
+    RowStream { rx }
+}
+
+async fn pump(
+    db_file: &str,
+    table: &str,
+    columns: &[String],
+    tx: &std::sync::mpsc::SyncSender<Result<Vec<String>>>,
+) -> Result<()> {
+    let mut conn = connect(db_file).await?;
 
     let select_list = columns
         .iter()
@@ -82,17 +122,28 @@ pub async fn read_table(
         .join(", ");
     let sql = format!("SELECT {select_list} FROM \"{table}\"");
 
-    let mut out: Vec<Vec<String>> = Vec::with_capacity(total as usize);
     let mut stream = sqlx::query(&sql).fetch(&mut conn);
-
     while let Some(row) = stream.try_next().await? {
         let mut record = Vec::with_capacity(columns.len());
         for i in 0..columns.len() {
             let value: Option<String> = row.try_get(i)?;
             record.push(value.unwrap_or_default());
         }
-        out.push(record);
+        if tx.send(Ok(record)).is_err() {
+            break;
+        }
     }
+    Ok(())
+}
 
-    Ok((table, columns, out))
+struct RowStream {
+    rx: Receiver<Result<Vec<String>>>,
+}
+
+impl Iterator for RowStream {
+    type Item = Result<Vec<String>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.recv().ok()
+    }
 }
