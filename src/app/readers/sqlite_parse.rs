@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};

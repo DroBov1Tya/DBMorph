@@ -1,6 +1,6 @@
 [package]
 name = "DBMorph"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]
@@ -15,7 +15,7 @@ encoding_rs_io = "0.1.7"
 futures = "0.3.31"
 obfstr = "0.4.4"
 parquet = { version = "60.0.0", default-features = false, features = ["arrow", "zstd", "snap", "brotli", "flate2-rust_backend", "lz4"] }
-serde_json = "1.0.140"
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
 sqlparser = "0.56.0"
 sqlx = { version = "0.8.5", features = ["sqlite", "runtime-tokio-native-tls", "mysql", "postgres"] }
 tabled = "0.19.0"

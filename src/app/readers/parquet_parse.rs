@@ -36,7 +36,10 @@ pub fn parquet_row_reader<P: AsRef<Path>>(
         .build()?;
 
     let iter = reader.flat_map(|batch| match batch {
-        Ok(batch) => batch_to_rows(&batch).into_iter().map(Ok).collect::<Vec<_>>(),
+        Ok(batch) => batch_to_rows(&batch)
+            .into_iter()
+            .map(Ok)
+            .collect::<Vec<_>>(),
         Err(e) => vec![Err(anyhow::Error::from(e))],
     });
 

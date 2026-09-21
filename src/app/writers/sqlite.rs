@@ -28,6 +28,7 @@ pub async fn sqlite_processing(args: &AppArgs) -> Result<()> {
     match args.input_file_type.as_str() {
         "csv" | "txt" => ingest_csv(&mut conn, args).await?,
         "parquet" => ingest_parquet(&mut conn, args).await?,
+        "json" | "jsonl" | "ndjson" => ingest_json(&mut conn, args).await?,
         "sql" => {
             readers::sql_parse::parse_dump_simple(args.input_path.clone()).await?;
         }
@@ -58,6 +59,18 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<()> {
         has_headers,
     )
     .await?;
+
+    requests::init_insert_process(conn, &args.table_name, columns, args.batch_size, rows, None)
+        .await
+}
+
+async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<()> {
+    let headers = readers::json_parse::json_schema(&args.input_path)?;
+    ui::field("columns", &headers.len().to_string());
+
+    let columns = requests::create_fts5_table(conn, &args.table_name, &headers).await?;
+
+    let rows = readers::json_parse::json_row_reader(args.input_path.clone(), columns.clone())?;
 
     requests::init_insert_process(conn, &args.table_name, columns, args.batch_size, rows, None)
         .await

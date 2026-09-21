@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use csv::ReaderBuilder;
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
@@ -32,8 +32,13 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
         .from_reader(decoding_reader);
 
     let iter = csv_reader.into_records().map(|res| {
-        res.map(|record| record.iter().map(|s| s.to_string()).collect::<Vec<String>>())
-            .map_err(anyhow::Error::from)
+        res.map(|record| {
+            record
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>()
+        })
+        .map_err(anyhow::Error::from)
     });
 
     Ok(iter)

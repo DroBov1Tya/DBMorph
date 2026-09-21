@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use csv::WriterBuilder;
 
 use crate::app::readers;
@@ -24,8 +24,9 @@ pub async fn csv_processing(args: &AppArgs) -> Result<()> {
     match args.input_file_type.as_str() {
         "parquet" => parquet_to_csv(args, &out_path).await?,
         "sqlite" => sqlite_to_csv(args, &out_path).await?,
+        "json" | "jsonl" | "ndjson" => json_to_csv(args, &out_path).await?,
         "csv" | "txt" => csv_to_csv(args, &out_path).await?,
-        other => bail!("CSV output supports parquet/sqlite/csv/txt input, got: {other}"),
+        other => bail!("CSV output supports parquet/sqlite/json/csv/txt input, got: {other}"),
     }
 
     Ok(())
@@ -36,7 +37,14 @@ async fn parquet_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
     ui::field("rows", &total_rows.to_string());
 
     let rows = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
-    write_all(out_path, headers, args.delimiter, rows, Some(total_rows as u64)).await
+    write_all(
+        out_path,
+        headers,
+        args.delimiter,
+        rows,
+        Some(total_rows as u64),
+    )
+    .await
 }
 
 async fn sqlite_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
@@ -47,6 +55,14 @@ async fn sqlite_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
     let total = data.len() as u64;
     let rows = data.into_iter().map(Ok);
     write_all(out_path, headers, args.delimiter, rows, Some(total)).await
+}
+
+async fn json_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
+    let headers = readers::json_parse::json_schema(&args.input_path)?;
+    ui::field("columns", &headers.len().to_string());
+
+    let rows = readers::json_parse::json_row_reader(args.input_path.clone(), headers.clone())?;
+    write_all(out_path, headers, args.delimiter, rows, None).await
 }
 
 async fn csv_to_csv(args: &AppArgs, out_path: &str) -> Result<()> {
@@ -79,9 +95,7 @@ async fn write_all(
     total_rows: Option<u64>,
 ) -> Result<()> {
     let file = BufWriter::with_capacity(config::WRITE_BUFFER_BYTES, File::create(out_path)?);
-    let mut writer = WriterBuilder::new()
-        .delimiter(delimiter)
-        .from_writer(file);
+    let mut writer = WriterBuilder::new().delimiter(delimiter).from_writer(file);
 
     ui::field("columns", &headers.len().to_string());
     writer.write_record(&headers)?;

@@ -16,16 +16,31 @@ pub struct AppArgs {
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output_path: String,
 
-    /// Source format: csv, txt, parquet, sql
-    #[arg(short = 'f', long = "from", value_name = "FORMAT", default_value = "csv")]
+    /// Source format: csv, txt, json, parquet, sqlite, sql
+    #[arg(
+        short = 'f',
+        long = "from",
+        value_name = "FORMAT",
+        default_value = "csv"
+    )]
     pub input_file_type: String,
 
     /// Target format: sqlite, parquet, csv
-    #[arg(short = 't', long = "to", value_name = "TARGET", default_value = "sqlite")]
+    #[arg(
+        short = 't',
+        long = "to",
+        value_name = "TARGET",
+        default_value = "sqlite"
+    )]
     pub database_type: String,
 
     /// Destination table name (sqlite target)
-    #[arg(short = 'n', long = "table-name", value_name = "NAME", default_value = "main")]
+    #[arg(
+        short = 'n',
+        long = "table-name",
+        value_name = "NAME",
+        default_value = "main"
+    )]
     pub table_name: String,
 
     /// Input encoding (auto-detected when omitted)
