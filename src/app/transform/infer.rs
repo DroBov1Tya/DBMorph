@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::DataType;
 
-/// Inferred logical type for a Parquet column.
+// Inferred logical type for a Parquet column.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColType {
     Int,
@@ -39,7 +39,7 @@ fn as_bool(s: &str) -> Option<bool> {
     }
 }
 
-/// Infers a type per column from a sample; empty cells count as null.
+// Infers a type per column from a sample; empty cells count as null.
 pub fn infer_types(sample: &[Vec<String>], col_count: usize) -> Vec<ColType> {
     let mut types = vec![ColType::Text; col_count];
 
@@ -82,7 +82,7 @@ pub fn infer_types(sample: &[Vec<String>], col_count: usize) -> Vec<ColType> {
     types
 }
 
-/// Builds a typed Arrow array from string cells; empty or unparseable => null.
+// Builds a typed Arrow array from string cells; empty or unparseable cells become null.
 pub fn build_array(ty: ColType, values: Vec<Option<String>>) -> ArrayRef {
     match ty {
         ColType::Int => {

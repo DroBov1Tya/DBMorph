@@ -30,6 +30,7 @@ pub async fn sqlite_processing(args: &AppArgs) -> Result<u64> {
         "csv" | "txt" => ingest_csv(&mut conn, args).await?,
         "parquet" => ingest_parquet(&mut conn, args).await?,
         "json" | "jsonl" | "ndjson" => ingest_json(&mut conn, args).await?,
+        "xlsx" | "xls" | "ods" => ingest_xlsx(&mut conn, args).await?,
         "sql" | "dump" => ingest_sql(&mut conn, args).await?,
         other => {
             ui::warn(&format!("Unsupported input file type: {other}"));
@@ -49,27 +50,54 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
 
     let has_headers = !args.no_header;
     let quoting = !args.no_quote;
+    let repair = !args.no_repair;
     let headers = readers::csv_parse::csv_headers(
         &args.input_path,
         args.delimiter,
         &encoding,
         has_headers,
         quoting,
+        repair,
     )
     .await?;
 
-    let columns = requests::create_fts5_table(conn, &args.table_name, &headers).await?;
+    let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let columns = requests::create_fts5_table(conn, &args.table_name, &names).await?;
 
-    let raw = readers::csv_parse::csv_row_reader(
+    let (raw, repairs) = readers::csv_parse::csv_row_reader(
         args.input_path.clone(),
         args.delimiter,
         &encoding,
         has_headers,
         quoting,
+        repair,
     )
     .await?;
 
-    let guard = RowGuard::new(columns.len(), args.max_field, args.strict);
+    let guard = RowGuard::new(columns.len(), args.max_field, args.strict, &args.trim);
+    requests::init_insert_process(
+        conn,
+        &args.table_name,
+        columns,
+        args.batch_size,
+        guarded(raw, guard.clone()),
+        None,
+    )
+    .await?;
+    Ok(guard.finish() + readers::csv_parse::report_repairs(&repairs))
+}
+
+async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+    let headers = readers::json_parse::json_schema(&args.input_path)?;
+    ui::field("columns", &headers.len().to_string());
+
+    let read_names = transform::columns::unique_column_names(&headers);
+    let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let columns = requests::create_fts5_table(conn, &args.table_name, &names).await?;
+
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), read_names)?;
+
+    let guard = RowGuard::new(columns.len(), args.max_field, args.strict, &args.trim);
     requests::init_insert_process(
         conn,
         &args.table_name,
@@ -82,15 +110,18 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
     Ok(guard.finish())
 }
 
-async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
-    let headers = readers::json_parse::json_schema(&args.input_path)?;
+async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+    let path = std::path::Path::new(&args.input_path);
+    let has_headers = !args.no_header;
+    let headers = readers::xlsx_parse::xlsx_headers(path, has_headers)?;
     ui::field("columns", &headers.len().to_string());
 
-    let columns = requests::create_fts5_table(conn, &args.table_name, &headers).await?;
+    let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let columns = requests::create_fts5_table(conn, &args.table_name, &names).await?;
 
-    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), columns.clone())?;
+    let raw = readers::xlsx_parse::xlsx_row_reader(path, has_headers)?;
 
-    let guard = RowGuard::new(columns.len(), args.max_field, args.strict);
+    let guard = RowGuard::new(columns.len(), args.max_field, args.strict, &args.trim);
     requests::init_insert_process(
         conn,
         &args.table_name,
@@ -107,11 +138,12 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
     let (names, total_rows) = readers::parquet_parse::schema_columns(&args.input_path)?;
     ui::field("columns", &names.len().to_string());
 
+    let names = transform::columns::resolve_output_names(&names, args.columns.as_deref())?;
     let columns = requests::create_fts5_table(conn, &args.table_name, &names).await?;
 
     let raw = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
 
-    let guard = RowGuard::new(columns.len(), args.max_field, args.strict);
+    let guard = RowGuard::new(columns.len(), args.max_field, args.strict, &args.trim);
     requests::init_insert_process(
         conn,
         &args.table_name,
@@ -141,9 +173,10 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
         args.table_name.clone()
     };
 
-    let columns = requests::create_fts5_table(conn, &dest_table, &headers).await?;
+    let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let columns = requests::create_fts5_table(conn, &dest_table, &names).await?;
 
-    let guard = RowGuard::new(columns.len(), args.max_field, args.strict);
+    let guard = RowGuard::new(columns.len(), args.max_field, args.strict, &args.trim);
     requests::init_insert_process(
         conn,
         &dest_table,

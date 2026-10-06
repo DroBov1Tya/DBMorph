@@ -35,7 +35,7 @@ impl Tokenizer {
         })
     }
 
-    /// A tokenizer with no backing file: yields EOF immediately.
+    // A tokenizer with no backing file: yields EOF immediately.
     fn empty() -> Self {
         Self {
             reader: None,
@@ -392,8 +392,8 @@ fn read_until_values(tok: &mut Tokenizer) -> Result<Option<Vec<String>>> {
     Ok(collist)
 }
 
-/// Opens a SQL dump in a single pass: resolves the source table and its columns,
-/// then returns an iterator positioned to stream that table's rows.
+// Opens a SQL dump in a single pass: resolves the source table and its columns,
+// then returns an iterator positioned to stream that table's rows.
 pub fn sql_open<P: AsRef<Path>>(
     path: P,
     wanted: Option<&str>,
@@ -482,7 +482,7 @@ pub fn sql_open<P: AsRef<Path>>(
     bail!("no INSERT or CREATE TABLE statement found in SQL dump");
 }
 
-/// Reads one VALUES tuple at its true width, opening `(` not yet consumed.
+// Reads one VALUES tuple at its true width, opening bracket not yet consumed.
 fn read_first_tuple(tok: &mut Tokenizer) -> Result<Vec<String>> {
     loop {
         match tok.next_token()? {
@@ -494,8 +494,8 @@ fn read_first_tuple(tok: &mut Tokenizer) -> Result<Vec<String>> {
     read_tuple_fields(tok)
 }
 
-/// Streaming reader over `INSERT INTO <target> VALUES (...)` tuples; `pending`
-/// holds a first tuple consumed early to infer the schema.
+// Streaming reader over the VALUES tuples of INSERT statements for the
+// target table; pending holds a first tuple consumed early to infer the schema.
 pub struct SqlRowIter {
     tok: Tokenizer,
     target: String,
@@ -541,7 +541,7 @@ impl SqlRowIter {
     }
 }
 
-/// Reads one VALUES tuple at its true field width, opening `(` already consumed.
+// Reads one VALUES tuple at its true field width, opening bracket already consumed.
 fn read_tuple_fields(tok: &mut Tokenizer) -> Result<Vec<String>> {
     let mut fields: Vec<String> = Vec::new();
     let mut cur: Vec<Token> = Vec::new();

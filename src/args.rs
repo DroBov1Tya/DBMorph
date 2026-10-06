@@ -16,7 +16,7 @@ pub struct AppArgs {
     #[arg(short = 'o', long = "output", value_name = "FILE")]
     pub output_path: String,
 
-    /// Source format: csv, txt, json, parquet, sqlite, sql
+    /// Source format: csv, txt, json, xlsx, parquet, sqlite, sql
     #[arg(
         short = 'f',
         long = "from",
@@ -34,12 +34,12 @@ pub struct AppArgs {
     )]
     pub database_type: String,
 
-    /// Destination table name (sqlite target)
+    /// Table to read (sqlite source) or create (sqlite target)
     #[arg(
         short = 'n',
         long = "table-name",
         value_name = "NAME",
-        default_value = "main"
+        default_value = crate::config::DEFAULT_TABLE_NAME
     )]
     pub table_name: String,
 
@@ -92,6 +92,12 @@ pub struct AppArgs {
     #[arg(long = "max-field", value_name = "N", default_value_t = 0)]
     pub max_field: usize,
 
+    /// Strip the given characters from BOTH edges of every cell. Each char in
+    /// the set is trimmed, e.g. `--trim '"'` turns `"somename"` into
+    /// `somename`; `--trim '"'\'' '` also strips single quotes and spaces.
+    #[arg(long = "trim", value_name = "CHARS")]
+    pub trim: Option<String>,
+
     /// Abort on the first malformed row instead of skipping it
     #[arg(short = 's', long = "strict")]
     pub strict: bool,
@@ -104,6 +110,22 @@ pub struct AppArgs {
     /// (use for naive dumps where an unclosed quote would merge rows)
     #[arg(long = "no-quote")]
     pub no_quote: bool,
+
+    /// Disable on-the-fly row repair (default on for csv/txt): normally an
+    /// unterminated quote is closed at the line end so a stray quote cannot
+    /// merge following rows; pass this to keep RFC multi-line quoted fields
+    #[arg(long = "no-repair")]
+    pub no_repair: bool,
+
+    /// Count rows up front for a progress percentage (sqlite source only).
+    /// This is a full table scan and delays the start on huge databases.
+    #[arg(long = "count")]
+    pub count: bool,
+
+    /// Manually set output column names as a comma-separated list; the count
+    /// must match the source columns. Overrides detected/synthetic names.
+    #[arg(long = "columns", value_name = "A,B,C")]
+    pub columns: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

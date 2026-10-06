@@ -6,23 +6,30 @@ use anyhow::{Result, bail};
 use crate::app::utils::ui;
 use crate::config;
 
-/// Row hygiene shared by every reader: pads short rows, drops runaway-wide
-/// ones, optionally truncates fields, and counts skips for the exit code.
+// Row hygiene shared by every reader: pads short rows, drops runaway-wide
+// ones, optionally truncates fields, and counts skips for the exit code.
 #[derive(Clone)]
 pub struct RowGuard {
     expected: usize,
     max_field: usize,
     strict: bool,
+    trim: Arc<[char]>,
     skipped: Arc<AtomicU64>,
     warned: Arc<AtomicU64>,
 }
 
 impl RowGuard {
-    pub fn new(expected: usize, max_field: usize, strict: bool) -> Self {
+    pub fn new(expected: usize, max_field: usize, strict: bool, trim: &Option<String>) -> Self {
+        let trim: Arc<[char]> = trim
+            .as_deref()
+            .map(|s| s.chars().collect::<Vec<char>>())
+            .unwrap_or_default()
+            .into();
         Self {
             expected,
             max_field,
             strict,
+            trim,
             skipped: Arc::new(AtomicU64::new(0)),
             warned: Arc::new(AtomicU64::new(0)),
         }
@@ -32,7 +39,7 @@ impl RowGuard {
         self.skipped.load(Ordering::Relaxed)
     }
 
-    /// Normalizes one record: `Ok(Some)` to emit, `Ok(None)` to skip, `Err` in strict mode.
+    // Normalizes one record: Ok(Some) to emit, Ok(None) to skip, Err in strict mode.
     fn check(&self, index: u64, mut row: Vec<String>) -> Result<Option<Vec<String>>> {
         let got = row.len();
 
@@ -66,6 +73,16 @@ impl RowGuard {
             }
         }
 
+        if !self.trim.is_empty() {
+            let pat: &[char] = &self.trim;
+            for cell in row.iter_mut() {
+                let trimmed = cell.trim_matches(pat);
+                if trimmed.len() != cell.len() {
+                    *cell = trimmed.to_string();
+                }
+            }
+        }
+
         if self.max_field > 0 {
             for cell in row.iter_mut() {
                 truncate_in_place(cell, self.max_field);
@@ -88,7 +105,7 @@ impl RowGuard {
         }
     }
 
-    /// Prints a closing summary and returns the skip count.
+    // Prints a closing summary and returns the skip count.
     pub fn finish(&self) -> u64 {
         let n = self.skipped();
         if n > 0 {
@@ -98,7 +115,7 @@ impl RowGuard {
     }
 }
 
-/// Streams a raw row iterator through the guard.
+// Streams a raw row iterator through the guard.
 pub fn guarded<I>(rows: I, guard: RowGuard) -> impl Iterator<Item = Result<Vec<String>>>
 where
     I: Iterator<Item = Result<Vec<String>>>,

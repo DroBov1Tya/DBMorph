@@ -15,8 +15,22 @@ async fn connect(db_file: &str) -> Result<SqliteConnection> {
         format!("{db_file}.db")
     };
     let url = format!("sqlite://{path}");
-    let opts = SqliteConnectOptions::from_str(&url)?.create_if_missing(false);
+    let opts = SqliteConnectOptions::from_str(&url)?
+        .create_if_missing(false)
+        .read_only(true)
+        .pragma("mmap_size", config::SQLITE_MMAP_BYTES.to_string())
+        .pragma("cache_size", format!("-{}", config::SQLITE_CACHE_KIB));
     Ok(SqliteConnection::connect_with(&opts).await?)
+}
+
+async fn list_tables(conn: &mut SqliteConnection) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM sqlite_master WHERE type IN ('table','view') \
+         AND name NOT LIKE 'sqlite_%' ORDER BY rowid",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows.into_iter().map(|(name,)| name).collect())
 }
 
 async fn resolve_table(conn: &mut SqliteConnection, requested: &str) -> Result<String> {
@@ -31,15 +45,17 @@ async fn resolve_table(conn: &mut SqliteConnection, requested: &str) -> Result<S
         return Ok(name);
     }
 
-    let first: Option<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type IN ('table','view') \
-         AND name NOT LIKE 'sqlite_%' ORDER BY rowid LIMIT 1",
-    )
-    .fetch_optional(&mut *conn)
-    .await?;
+    let tables = list_tables(conn).await?;
 
-    match first {
-        Some((name,)) => Ok(name),
+    if requested != config::DEFAULT_TABLE_NAME {
+        bail!(
+            "table '{requested}' not found; available tables: {}",
+            tables.join(", ")
+        );
+    }
+
+    match tables.into_iter().next() {
+        Some(name) => Ok(name),
         None => bail!("no tables found in SQLite database"),
     }
 }
@@ -60,24 +76,27 @@ async fn column_names(conn: &mut SqliteConnection, table: &str) -> Result<Vec<St
     Ok(names)
 }
 
-async fn row_count(conn: &mut SqliteConnection, table: &str) -> Result<u64> {
+// Counts rows in a table. This is a full table scan in SQLite (no cached
+// count), so it is opt-in and never on the streaming start path.
+pub async fn count_rows(db_file: &str, table: &str) -> Result<u64> {
+    let mut conn = connect(db_file).await?;
     let count: (i64,) = sqlx::query_as(&format!("SELECT count(*) FROM \"{table}\""))
-        .fetch_one(&mut *conn)
+        .fetch_one(&mut conn)
         .await?;
     Ok(count.0.max(0) as u64)
 }
 
-/// Resolves the real table name, schema columns and row count without reading data.
-pub async fn schema(db_file: &str, requested_table: &str) -> Result<(String, Vec<String>, u64)> {
+// Resolves the real table name and schema columns without touching row data,
+// so streaming can start immediately even on huge databases.
+pub async fn schema(db_file: &str, requested_table: &str) -> Result<(String, Vec<String>)> {
     let mut conn = connect(db_file).await?;
     let table = resolve_table(&mut conn, requested_table).await?;
     let columns = column_names(&mut conn, &table).await?;
-    let total = row_count(&mut conn, &table).await?;
-    Ok((table, columns, total))
+    Ok((table, columns))
 }
 
-/// Streams a SQLite table as string rows without materializing it: a dedicated
-/// thread drives the async query and feeds a bounded channel read synchronously.
+// Streams a SQLite table as string rows without materializing it: a dedicated
+// thread drives the async query and feeds a bounded channel read synchronously.
 pub fn stream_rows(
     db_file: String,
     table: String,
