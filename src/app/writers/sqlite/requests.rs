@@ -77,7 +77,6 @@ pub async fn init_insert_process(
         anyhow::bail!("cannot insert into a table with zero columns");
     }
 
-    // Keep rows * columns under SQLite's bound-parameter ceiling.
     let param_cap = (config::SQLITE_MAX_PARAMS / col_count).max(1);
     let effective_batch = (batch_size.max(1) as usize).min(param_cap);
 
@@ -98,26 +97,23 @@ pub async fn init_insert_process(
     sqlx::query("BEGIN;").execute(&mut *conn).await?;
 
     for row_result in rows {
-        match row_result {
-            Ok(fields) => {
-                if !preview_shown {
-                    preview_buf.push(fields.clone());
-                    if preview_buf.len() >= config::PREVIEW_ROWS {
-                        process_and_pause(std::mem::take(&mut preview_buf)).await?;
-                        preview_shown = true;
-                    }
-                }
+        let fields = row_result?;
 
-                chunk.push(fields);
-                total += 1;
-
-                if chunk.len() >= effective_batch {
-                    insert_batch(conn, &full_sql, col_count, &chunk).await?;
-                    chunk.clear();
-                    ui::progress("insert", total, total_rows);
-                }
+        if !preview_shown {
+            preview_buf.push(fields.clone());
+            if preview_buf.len() >= config::PREVIEW_ROWS {
+                process_and_pause(std::mem::take(&mut preview_buf)).await?;
+                preview_shown = true;
             }
-            Err(e) => ui::error(&format!("failed to read row: {e}")),
+        }
+
+        chunk.push(fields);
+        total += 1;
+
+        if chunk.len() >= effective_batch {
+            insert_batch(conn, &full_sql, col_count, &chunk).await?;
+            chunk.clear();
+            ui::progress("insert", total, total_rows);
         }
     }
 
@@ -150,7 +146,7 @@ async fn insert_batch(
     for row in chunk {
         for i in 0..col_count {
             let val = row.get(i).map(|s| s.as_str()).unwrap_or("");
-            query = query.bind(truncate_field(val));
+            query = query.bind(val);
         }
     }
 
@@ -168,13 +164,6 @@ fn build_insert_sql(table: &str, columns: &str, col_count: usize, rows: usize) -
         values.push_str(&row_placeholders);
     }
     format!("INSERT INTO \"{table}\" ({columns}) VALUES {values}")
-}
-
-fn truncate_field(input: &str) -> &str {
-    match input.char_indices().nth(config::MAX_FIELD_CHARS) {
-        Some((byte_idx, _)) => &input[..byte_idx],
-        None => input,
-    }
 }
 
 fn sanitize_identifier(name: &str) -> String {

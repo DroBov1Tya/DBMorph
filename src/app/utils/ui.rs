@@ -99,7 +99,12 @@ pub fn preview_table(records: &[Vec<String>], max_rows: usize, max_cols: usize) 
     let rows: Vec<Vec<String>> = records
         .iter()
         .take(max_rows)
-        .map(|row| row.iter().take(max_cols).map(|cell| clip(cell, 32)).collect())
+        .map(|row| {
+            row.iter()
+                .take(max_cols)
+                .map(|cell| clip(cell, 32))
+                .collect()
+        })
         .collect();
 
     let mut builder = Builder::default();

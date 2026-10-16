@@ -3,3 +3,4 @@ pub mod json_parse;
 pub mod parquet_parse;
 pub mod sql_parse;
 pub mod sqlite_parse;
+pub mod xlsx_parse;

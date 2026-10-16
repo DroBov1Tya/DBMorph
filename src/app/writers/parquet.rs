@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{bail, Result};
-use arrow::array::{ArrayRef, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use anyhow::{Result, bail};
+use arrow::array::ArrayRef;
+use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::{BrotliLevel, Compression as ParquetCompression, GzipLevel, ZstdLevel};
@@ -14,12 +15,16 @@ use parquet::file::properties::WriterProperties;
 
 use crate::app::readers;
 use crate::app::transform;
+use crate::app::transform::infer::{self, ColType};
+use crate::app::transform::rows::{RowGuard, guarded};
 use crate::app::utils::cli_prompt::process_and_pause;
 use crate::app::utils::ui;
 use crate::args::{AppArgs, Compression};
 use crate::config;
 
-pub async fn parquet_processing(args: &AppArgs) -> Result<()> {
+mod recode;
+
+pub async fn parquet_processing(args: &AppArgs) -> Result<u64> {
     let out_path = if args.output_path.ends_with(".parquet") {
         args.output_path.clone()
     } else {
@@ -27,18 +32,25 @@ pub async fn parquet_processing(args: &AppArgs) -> Result<()> {
     };
 
     ui::section("parquet");
+    ensure_distinct_paths(Path::new(&args.input_path), Path::new(&out_path))?;
 
-    match args.input_file_type.as_str() {
+    let skipped = match args.input_file_type.as_str() {
         "csv" | "txt" => csv_to_parquet(args, &out_path).await?,
+        "json" | "jsonl" | "ndjson" => json_to_parquet(args, &out_path).await?,
+        "xlsx" | "xls" | "ods" => xlsx_to_parquet(args, &out_path).await?,
+        "sql" | "dump" => sql_to_parquet(args, &out_path).await?,
         "sqlite" => sqlite_to_parquet(args, &out_path).await?,
-        other => bail!("Parquet output supports csv/txt/sqlite input, got: {other}"),
-    }
+        "parquet" => parquet_to_parquet(args, &out_path).await?,
+        other => bail!(
+            "Parquet output supports csv/txt/json/xlsx/sql/sqlite/parquet input, got: {other}"
+        ),
+    };
 
     verify_output(&out_path)?;
-    Ok(())
+    Ok(skipped)
 }
 
-async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<()> {
+async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     let encoding = match &args.encoding {
         Some(enc) => enc.clone(),
         None => transform::encoding::detect_encoding(&args.input_path)?,
@@ -46,32 +58,168 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<()> {
     ui::field("charset", &encoding);
 
     let has_headers = !args.no_header;
-    let headers =
-        readers::csv_parse::csv_headers(&args.input_path, args.delimiter, &encoding, has_headers)
-            .await?;
-    let column_names = unique_column_names(&headers);
+    let quoting = !args.no_quote;
+    let repair = !args.no_repair;
+    let headers = readers::csv_parse::csv_headers(
+        &args.input_path,
+        args.delimiter,
+        &encoding,
+        has_headers,
+        quoting,
+        repair,
+    )
+    .await?;
+    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
-    let rows = readers::csv_parse::csv_row_reader(
+    let (raw, repairs) = readers::csv_parse::csv_row_reader(
         args.input_path.clone(),
         args.delimiter,
         &encoding,
         has_headers,
+        quoting,
+        repair,
     )
     .await?;
 
-    write_parquet(args, out_path, column_names, rows, None).await
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        None,
+    )
+    .await?;
+    Ok(guard.finish() + readers::csv_parse::report_repairs(&repairs))
 }
 
-async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<()> {
-    let (table, headers, data) =
-        readers::sqlite_parse::read_table(&args.input_path, &args.table_name).await?;
+async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
+    let headers = readers::json_parse::json_schema(&args.input_path)?;
+    let read_names = unique_column_names(&headers);
+    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), read_names)?;
+
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        None,
+    )
+    .await?;
+    Ok(guard.finish())
+}
+
+async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
+    let path = std::path::Path::new(&args.input_path);
+    let has_headers = !args.no_header;
+    let headers = readers::xlsx_parse::xlsx_headers(path, has_headers)?;
+    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+
+    let raw = readers::xlsx_parse::xlsx_row_reader(path, has_headers)?;
+
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        None,
+    )
+    .await?;
+    Ok(guard.finish())
+}
+
+async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
+    let (table, headers) =
+        readers::sqlite_parse::schema(&args.input_path, &args.table_name).await?;
     ui::field("table", &table);
 
-    let column_names = unique_column_names(&headers);
-    let total = data.len() as u64;
-    let rows = data.into_iter().map(Ok);
+    let total = if args.count {
+        Some(readers::sqlite_parse::count_rows(&args.input_path, &table).await?)
+    } else {
+        None
+    };
 
-    write_parquet(args, out_path, column_names, rows, Some(total)).await
+    let read_names = unique_column_names(&headers);
+    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, read_names);
+
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        total,
+    )
+    .await?;
+    Ok(guard.finish())
+}
+
+async fn parquet_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
+    if rewrites_cells(args) {
+        ui::warn(
+            "--trim/--max-field/--infer-types rewrite cells as text: \
+             source types, NULLs and nested columns are not preserved",
+        );
+        return parquet_to_parquet_as_text(args, out_path).await;
+    }
+
+    recode::run(args, out_path).await?;
+    Ok(0)
+}
+
+// True when an option changes cell values. Such options need the text
+// path, otherwise a Parquet source is copied with its types kept.
+fn rewrites_cells(args: &AppArgs) -> bool {
+    let trims = args.trim.as_deref().is_some_and(|chars| !chars.is_empty());
+    trims || args.max_field > 0 || args.infer_types
+}
+
+async fn parquet_to_parquet_as_text(args: &AppArgs, out_path: &str) -> Result<u64> {
+    let (auto, total_rows) = readers::parquet_parse::schema_columns(&args.input_path)?;
+    ui::field("rows", &total_rows.to_string());
+
+    let column_names = transform::columns::resolve_output_names(&auto, args.columns.as_deref())?;
+
+    let raw = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
+
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        Some(total_rows as u64),
+    )
+    .await?;
+    Ok(guard.finish())
+}
+
+async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
+    let wanted = if args.table_name == "main" {
+        None
+    } else {
+        Some(args.table_name.as_str())
+    };
+
+    let (source_table, headers, raw) = readers::sql_parse::sql_open(&args.input_path, wanted)?;
+    ui::field("source table", &source_table);
+
+    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
+    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    write_parquet(
+        args,
+        out_path,
+        column_names,
+        guarded(raw, guard.clone()),
+        None,
+    )
+    .await?;
+    Ok(guard.finish())
 }
 
 async fn write_parquet(
@@ -89,9 +237,38 @@ async fn write_parquet(
     }
     ui::field("columns", &col_count.to_string());
 
+    let sample_target = if args.infer_types {
+        config::PARQUET_INFER_SAMPLE
+    } else {
+        config::PREVIEW_ROWS
+    };
+
+    let mut rows = rows;
+    let mut sample: Vec<Vec<String>> = Vec::with_capacity(sample_target);
+    for row in rows.by_ref() {
+        sample.push(row?);
+        if sample.len() >= sample_target {
+            break;
+        }
+    }
+
+    if !sample.is_empty() {
+        let preview: Vec<Vec<String>> = sample.iter().take(config::PREVIEW_ROWS).cloned().collect();
+        process_and_pause(preview).await?;
+    }
+
+    let types: Vec<ColType> = if args.infer_types {
+        let t = infer::infer_types(&sample, col_count);
+        ui::field("inferred", &describe_types(&t));
+        t
+    } else {
+        vec![ColType::Text; col_count]
+    };
+
     let fields: Vec<Field> = column_names
         .iter()
-        .map(|name| Field::new(name, DataType::Utf8, true))
+        .zip(types.iter())
+        .map(|(name, ty)| Field::new(name, ty.arrow(), true))
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
@@ -103,11 +280,7 @@ async fn write_parquet(
 
     let file = BufWriter::with_capacity(config::WRITE_BUFFER_BYTES, File::create(out_path)?);
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
-    ui::step(&format!(
-        "writing {}{} → {out_path}",
-        format!("{:?}", args.compression).to_lowercase(),
-        args.level.map(|l| format!(":{l}")).unwrap_or_default()
-    ));
+    ui::step(&format!("writing {} -> {out_path}", codec_label(args)));
 
     let started = Instant::now();
     let mut columns: Vec<Vec<Option<String>>> = (0..col_count)
@@ -115,43 +288,38 @@ async fn write_parquet(
         .collect();
     let mut in_batch = 0usize;
     let mut total = 0u64;
-    let mut preview_shown = false;
-    let mut preview_buf: Vec<Vec<String>> = Vec::new();
 
-    for row_result in rows {
-        match row_result {
-            Ok(record) => {
-                if !preview_shown {
-                    preview_buf.push(record.clone());
-                    if preview_buf.len() >= config::PREVIEW_ROWS {
-                        process_and_pause(std::mem::take(&mut preview_buf)).await?;
-                        preview_shown = true;
-                    }
-                }
+    let push_row = |columns: &mut Vec<Vec<Option<String>>>, record: Vec<String>| {
+        let mut fields = record.into_iter();
+        for slot in columns.iter_mut() {
+            slot.push(fields.next());
+        }
+    };
 
-                let mut fields = record.into_iter();
-                for slot in columns.iter_mut() {
-                    slot.push(fields.next());
-                }
-                in_batch += 1;
-                total += 1;
-
-                if in_batch >= row_group_size {
-                    write_batch(&mut writer, &schema, &mut columns)?;
-                    in_batch = 0;
-                    ui::progress("write", total, total_rows);
-                }
-            }
-            Err(e) => ui::error(&format!("failed to read row: {e}")),
+    for record in sample.drain(..) {
+        push_row(&mut columns, record);
+        in_batch += 1;
+        total += 1;
+        if in_batch >= row_group_size {
+            write_batch(&mut writer, &schema, &types, &mut columns)?;
+            in_batch = 0;
+            ui::progress("write", total, total_rows);
         }
     }
 
-    if !preview_shown && !preview_buf.is_empty() {
-        process_and_pause(std::mem::take(&mut preview_buf)).await?;
+    for row in rows {
+        push_row(&mut columns, row?);
+        in_batch += 1;
+        total += 1;
+        if in_batch >= row_group_size {
+            write_batch(&mut writer, &schema, &types, &mut columns)?;
+            in_batch = 0;
+            ui::progress("write", total, total_rows);
+        }
     }
 
     if in_batch > 0 {
-        write_batch(&mut writer, &schema, &mut columns)?;
+        write_batch(&mut writer, &schema, &types, &mut columns)?;
     }
 
     writer.close()?;
@@ -162,19 +330,34 @@ async fn write_parquet(
 fn write_batch<W: Write + Send>(
     writer: &mut ArrowWriter<W>,
     schema: &Arc<Schema>,
+    types: &[ColType],
     columns: &mut [Vec<Option<String>>],
 ) -> Result<()> {
     let arrays: Vec<ArrayRef> = columns
         .iter_mut()
-        .map(|col| {
-            let arr: StringArray = std::mem::take(col).into_iter().collect();
-            Arc::new(arr) as ArrayRef
-        })
+        .zip(types.iter())
+        .map(|(col, ty)| infer::build_array(*ty, std::mem::take(col)))
         .collect();
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
     writer.write(&batch)?;
     Ok(())
+}
+
+fn describe_types(types: &[ColType]) -> String {
+    let mut n_int = 0;
+    let mut n_float = 0;
+    let mut n_bool = 0;
+    let mut n_text = 0;
+    for t in types {
+        match t {
+            ColType::Int => n_int += 1,
+            ColType::Float => n_float += 1,
+            ColType::Bool => n_bool += 1,
+            ColType::Text => n_text += 1,
+        }
+    }
+    format!("{n_int} int, {n_float} float, {n_bool} bool, {n_text} text")
 }
 
 fn verify_output(out_path: &str) -> Result<()> {
@@ -217,6 +400,27 @@ fn pseudo_random_mid(total_rows: usize) -> i64 {
         .map(|d| d.as_nanos() as usize)
         .unwrap_or(0);
     (now % total_rows) as i64
+}
+
+// Creating the output file empties it first, so writing onto the input
+// would destroy the input before a single row is read.
+fn ensure_distinct_paths(input: &Path, output: &Path) -> Result<()> {
+    // An output that does not exist yet cannot be the input.
+    let (Ok(input), Ok(output)) = (input.canonicalize(), output.canonicalize()) else {
+        return Ok(());
+    };
+    if input == output {
+        bail!("output {output:?} is the input file; choose a different -o path");
+    }
+    Ok(())
+}
+
+fn codec_label(args: &AppArgs) -> String {
+    format!(
+        "{}{}",
+        format!("{:?}", args.compression).to_lowercase(),
+        args.level.map(|l| format!(":{l}")).unwrap_or_default()
+    )
 }
 
 fn map_compression(c: Compression, level: Option<i32>) -> Result<ParquetCompression> {
