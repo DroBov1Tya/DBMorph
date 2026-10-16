@@ -15,8 +15,10 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
+use parquet::arrow::arrow_writer::{ArrowColumnChunk, ArrowRowGroupWriterFactory, compute_leaves};
 use parquet::basic::Compression as ParquetCompression;
 use parquet::file::properties::WriterProperties;
+use parquet::file::writer::SerializedFileWriter;
 
 use crate::app::readers;
 use crate::app::transform;
@@ -88,25 +90,24 @@ fn recode(
 
     let sink = File::create(output).with_context(|| format!("failed to create {output:?}"))?;
     let sink = BufWriter::with_capacity(config::WRITE_BUFFER_BYTES, sink);
-    let mut writer = ArrowWriter::try_new(sink, schema.clone(), Some(props))?;
+    let writer = ArrowWriter::try_new(sink, schema.clone(), Some(props))?;
+    let (mut writer, factory) = writer.into_serialized_writer()?;
 
     let mut written = 0u64;
     for group in 0..source.metadata().num_row_groups() {
+        let group_rows = source.metadata().row_group(group).num_rows() as usize;
         let batches =
             ParquetRecordBatchReaderBuilder::new_with_metadata(file.try_clone()?, source.clone())
                 .with_row_groups(vec![group])
-                .with_batch_size(config::PARQUET_READ_BATCH)
+                .with_batch_size(group_rows.max(1))
                 .build()?;
 
         for batch in batches {
             let batch = batch?;
             written += batch.num_rows() as u64;
-            writer.write(&RecordBatch::try_new(
-                schema.clone(),
-                batch.columns().to_vec(),
-            )?)?;
+            let batch = RecordBatch::try_new(schema.clone(), batch.columns().to_vec())?;
+            write_batch_parallel(&mut writer, &factory, &schema, &batch)?;
         }
-        writer.flush()?;
         on_progress(written);
     }
     writer.close()?;
@@ -115,6 +116,66 @@ fn recode(
         bail!("re-encoded {written} row(s) but the source footer declares {expected_rows}");
     }
     Ok(written)
+}
+
+fn write_batch_parallel<W: std::io::Write + Send>(
+    writer: &mut SerializedFileWriter<W>,
+    factory: &ArrowRowGroupWriterFactory,
+    schema: &SchemaRef,
+    batch: &RecordBatch,
+) -> Result<()> {
+    let column_writers = factory.create_column_writers(writer.flushed_row_groups().len())?;
+    let mut leaves = Vec::new();
+    for (field, array) in schema.fields().iter().zip(batch.columns()) {
+        leaves.extend(compute_leaves(field, array)?);
+    }
+    if leaves.len() != column_writers.len() {
+        bail!(
+            "Arrow produced {} leaf columns for {} Parquet column writers",
+            leaves.len(),
+            column_writers.len()
+        );
+    }
+    let jobs: Vec<_> = column_writers.into_iter().zip(leaves).collect();
+
+    let worker_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(jobs.len().max(1));
+    let mut assignments: Vec<Vec<_>> = (0..worker_count).map(|_| Vec::new()).collect();
+    for (index, job) in jobs.into_iter().enumerate() {
+        assignments[index % worker_count].push((index, job));
+    }
+    let chunks = std::thread::scope(|scope| -> Result<Vec<(usize, ArrowColumnChunk)>> {
+        let mut handles = Vec::with_capacity(worker_count);
+        for assigned in assignments {
+            handles.push(scope.spawn(move || -> Result<Vec<_>> {
+                assigned
+                    .into_iter()
+                    .map(|(index, (mut column_writer, leaf))| {
+                        column_writer.write(&leaf)?;
+                        Ok((index, column_writer.close()?))
+                    })
+                    .collect()
+            }));
+        }
+        let mut completed = Vec::new();
+        for handle in handles {
+            let result = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Parquet column encoder worker panicked"))??;
+            completed.extend(result);
+        }
+        completed.sort_unstable_by_key(|(index, _)| *index);
+        Ok(completed)
+    })?;
+
+    let mut row_group = writer.next_row_group()?;
+    for (_, chunk) in chunks {
+        chunk.append_to_row_group(&mut row_group)?;
+    }
+    row_group.close()?;
+    Ok(())
 }
 
 fn output_schema(source: &SchemaRef, rename: Option<&[String]>) -> Result<SchemaRef> {
