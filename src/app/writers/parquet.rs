@@ -15,8 +15,9 @@ use parquet::file::properties::WriterProperties;
 use crate::app::readers;
 use crate::app::transform;
 use crate::app::transform::infer::{self, ColType, Mismatches};
-use crate::app::transform::rows::{RowGuard, guarded};
+use crate::app::transform::rows::{RowGuard, guarded, pipelined};
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::{AppArgs, Compression};
 use crate::config;
@@ -70,6 +71,7 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     .await?;
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
+    let progress = Progress::file(&args.input_path);
     let (raw, repairs) = readers::csv_parse::csv_row_reader(
         args.input_path.clone(),
         args.delimiter,
@@ -77,6 +79,7 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         has_headers,
         quoting,
         repair,
+        &progress,
     )
     .await?;
 
@@ -85,8 +88,8 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched + readers::csv_parse::report_repairs(&repairs))
@@ -96,16 +99,17 @@ async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     let headers = readers::json_parse::json_schema(&args.input_path)?;
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
+    let progress = Progress::file(&args.input_path);
     // Rows are looked up by the original JSON keys, not the cleaned names.
-    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers)?;
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers, &progress)?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
     let mismatched = write_parquet(
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -124,8 +128,8 @@ async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &Progress::unknown(),
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -151,8 +155,8 @@ async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        total,
+        pipelined(guarded(raw, guard.clone()))?,
+        &total.map_or_else(Progress::unknown, Progress::rows),
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -184,15 +188,15 @@ async fn parquet_to_parquet_as_text(args: &AppArgs, out_path: &str) -> Result<u6
 
     let column_names = transform::columns::resolve_output_names(&auto, args.columns.as_deref())?;
 
-    let raw = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
+    let raw = readers::parquet_parse::parquet_row_reader(std::path::Path::new(&args.input_path))?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
     let mismatched = write_parquet(
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        Some(total_rows as u64),
+        pipelined(guarded(raw, guard.clone()))?,
+        &Progress::rows(total_rows as u64),
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -205,7 +209,9 @@ async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         Some(args.table_name.as_str())
     };
 
-    let (source_table, headers, raw) = readers::sql_parse::sql_open(&args.input_path, wanted)?;
+    let progress = Progress::file(&args.input_path);
+    let (source_table, headers, raw) =
+        readers::sql_parse::sql_open(&args.input_path, wanted, &progress)?;
     ui::field("source table", &source_table);
 
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
@@ -214,8 +220,8 @@ async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         args,
         out_path,
         column_names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -226,7 +232,7 @@ async fn write_parquet(
     out_path: &str,
     column_names: Vec<String>,
     rows: impl Iterator<Item = Result<Vec<String>>>,
-    total_rows: Option<u64>,
+    progress: &Progress,
 ) -> Result<u64> {
     let row_group_size = args.batch_size.max(1) as usize;
 
@@ -282,6 +288,7 @@ async fn write_parquet(
     ui::step(&format!("writing {} -> {out_path}", codec_label(args)));
 
     let started = Instant::now();
+    let progress = &progress.restarted();
     let mut columns: Vec<Vec<Option<String>>> = (0..col_count)
         .map(|_| Vec::with_capacity(row_group_size))
         .collect();
@@ -310,7 +317,7 @@ async fn write_parquet(
                 args.strict,
             )?;
             in_batch = 0;
-            ui::progress("write", total, total_rows);
+            ui::progress("write", total, progress);
         }
     }
 
@@ -328,7 +335,7 @@ async fn write_parquet(
                 args.strict,
             )?;
             in_batch = 0;
-            ui::progress("write", total, total_rows);
+            ui::progress("write", total, progress);
         }
     }
 

@@ -26,10 +26,9 @@ pub fn schema_columns<P: AsRef<Path>>(path: P) -> Result<(Vec<String>, usize)> {
     Ok((names, rows))
 }
 
-pub fn parquet_row_reader<P: AsRef<Path>>(
-    path: P,
-) -> Result<impl Iterator<Item = Result<Vec<String>>>> {
-    let path = path.as_ref();
+pub fn parquet_row_reader(
+    path: &Path,
+) -> Result<impl Iterator<Item = Result<Vec<String>>> + use<>> {
     let file = File::open(path).with_context(|| format!("failed to open parquet {path:?}"))?;
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)?
         .with_batch_size(config::PARQUET_READ_BATCH)

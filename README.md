@@ -330,9 +330,11 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 
 ```mermaid
 flowchart LR
-    A["Source file"] --> B["Reader<br/>decode + parse"]
-    B --> C["Row guard<br/>pad / truncate / trim"]
-    C --> D["Batcher<br/>-b rows"]
+    subgraph T1 ["reader thread"]
+        B["Reader<br/>decode + parse"] --> C["Row guard<br/>pad / truncate / trim"]
+    end
+    A["Source file"] --> B
+    C -- "bounded batches" --> D["Batcher<br/>-b rows"]
     D --> E1["SQLite<br/>FTS5 or STRICT"]
     D --> E2["Parquet"]
     D --> E3["CSV"]
@@ -340,23 +342,32 @@ flowchart LR
 ```
 
 1. **Read.** Each reader yields rows lazily. CSV goes through a 1 MiB buffer
-   and the quote-repair adapter; JSON arrays are split by a byte scanner that
-   holds a single element at a time; SQL dumps are tokenized in one pass.
+   and the quote-repair adapter; JSON arrays are split by a byte scanner
+   instead of being parsed whole; SQL dumps are tokenized in one pass.
 2. **Guard.** Every row is checked against the expected column count. Short
    rows are padded with empty values, long rows are cut, runaway rows (more
-   than 16x the expected width, at least 4096 fields) are dropped. The first 10 problems are printed, the rest are
-   counted.
+   than 16x the expected width, at least 4096 fields) are dropped. The first
+   10 problems are printed, the rest are counted. Reading, decoding and the
+   guard run on their own thread and hand rows to the writer in batches of
+   4096 rows or 8 MiB of text, whichever comes first (at most 4 batches in
+   flight), so parsing overlaps with writing.
 3. **Write.** Rows are batched and written:
    - **SQLite** uses multi-row 'INSERT' statements split under the bound
      parameter limit, inside one exclusive connection with journaling off.
      The table is created after the preview is confirmed; in typed mode its
      column types are inferred from the sampled rows, and every cell is bound
-     as an integer, float or text value.
+     as an integer, float or text value. A new FTS5 table is loaded with
+     segment merging deferred, then optimized into a single segment and its
+     FTS5 settings restored, also when the load fails.
    - **Parquet** builds Arrow record batches; with '--infer-types' the column
      types are inferred from the first 8192 rows ('--infer-rows').
    - **CSV** is written as UTF-8 through a buffered writer.
 4. **Verify.** Parquet output is reopened and the first, a middle and the last
    rows are read back.
+
+Progress shows a percentage, rows per second and an ETA. For CSV, SQL dump
+and JSON sources it follows the bytes read from the file; for Parquet and a
+counted SQLite table ('--count') it follows rows.
 
 ## Limitations
 

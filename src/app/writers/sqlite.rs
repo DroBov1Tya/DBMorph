@@ -7,8 +7,9 @@ use sqlx::{Connection, SqliteConnection};
 use crate::app::readers;
 use crate::app::transform;
 use crate::app::transform::infer::{self, ColType};
-use crate::app::transform::rows::{RowGuard, guarded};
+use crate::app::transform::rows::{RowGuard, guarded, pipelined};
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::{AppArgs, SqliteMode};
 use crate::config;
@@ -71,6 +72,7 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
 
     let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
+    let progress = Progress::file(&args.input_path);
     let (raw, repairs) = readers::csv_parse::csv_row_reader(
         args.input_path.clone(),
         args.delimiter,
@@ -78,6 +80,7 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
         has_headers,
         quoting,
         repair,
+        &progress,
     )
     .await?;
 
@@ -87,8 +90,8 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
         args,
         &args.table_name,
         &names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched + readers::csv_parse::report_repairs(&repairs))
@@ -100,8 +103,9 @@ async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
 
     let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
+    let progress = Progress::file(&args.input_path);
     // Rows are looked up by the original JSON keys, not the cleaned names.
-    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers)?;
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers, &progress)?;
 
     let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
     let mismatched = load_table(
@@ -109,8 +113,8 @@ async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
         args,
         &args.table_name,
         &names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -132,8 +136,8 @@ async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
         args,
         &args.table_name,
         &names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &Progress::unknown(),
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -145,7 +149,7 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
 
     let names = transform::columns::resolve_output_names(&names, args.columns.as_deref())?;
 
-    let raw = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
+    let raw = readers::parquet_parse::parquet_row_reader(std::path::Path::new(&args.input_path))?;
 
     let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
     let mismatched = load_table(
@@ -153,8 +157,8 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
         args,
         &args.table_name,
         &names,
-        guarded(raw, guard.clone()),
-        Some(total_rows as u64),
+        pipelined(guarded(raw, guard.clone()))?,
+        &Progress::rows(total_rows as u64),
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -167,7 +171,9 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
         Some(args.table_name.as_str())
     };
 
-    let (source_table, headers, raw) = readers::sql_parse::sql_open(&args.input_path, wanted)?;
+    let progress = Progress::file(&args.input_path);
+    let (source_table, headers, raw) =
+        readers::sql_parse::sql_open(&args.input_path, wanted, &progress)?;
     ui::field("source table", &source_table);
     ui::field("columns", &headers.len().to_string());
 
@@ -185,8 +191,8 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
         args,
         &dest_table,
         &names,
-        guarded(raw, guard.clone()),
-        None,
+        pipelined(guarded(raw, guard.clone()))?,
+        &progress,
     )
     .await?;
     Ok(guard.finish() + mismatched)
@@ -202,7 +208,7 @@ async fn load_table(
     table_name: &str,
     columns: &[String],
     mut rows: impl Iterator<Item = Result<Vec<String>>>,
-    total_rows: Option<u64>,
+    progress: &Progress,
 ) -> Result<u64> {
     let columns = &transform::columns::unique_column_names_nocase(columns);
 
@@ -238,18 +244,52 @@ async fn load_table(
         columns,
         types: &types,
     };
-    match args.sqlite_mode {
+    let fts5_bulk = match args.sqlite_mode {
         SqliteMode::Fts => requests::create_fts5_table(conn, &spec).await?,
-        SqliteMode::Typed => requests::create_typed_table(conn, &spec).await?,
+        SqliteMode::Typed => {
+            requests::create_typed_table(conn, &spec).await?;
+            false
+        }
+    };
+    if fts5_bulk {
+        requests::fts5_bulk_load_begin(conn, table_name).await?;
     }
 
-    requests::init_insert_process(
+    let loaded = requests::init_insert_process(
         conn,
         &spec,
         args.batch_size,
         args.strict,
         sample.into_iter().map(Ok).chain(rows),
-        total_rows,
+        progress,
     )
-    .await
+    .await;
+
+    if fts5_bulk {
+        finish_fts5_bulk_load(conn, table_name, loaded.is_ok()).await?;
+    }
+    loaded
+}
+
+// Undoes the bulk-load tuning. After a failed load the rows inserted so far
+// are committed and the defaults restored, so the table is never left with
+// merging switched off; the original error is what the caller reports.
+async fn finish_fts5_bulk_load(
+    conn: &mut SqliteConnection,
+    table_name: &str,
+    loaded: bool,
+) -> Result<()> {
+    if loaded {
+        requests::fts5_restore_defaults(conn, table_name).await?;
+        return requests::fts5_optimize(conn, table_name).await;
+    }
+
+    // The transaction may already be closed; a failing COMMIT changes nothing.
+    let _ = sqlx::query("COMMIT;").execute(&mut *conn).await;
+    if let Err(e) = requests::fts5_restore_defaults(conn, table_name).await {
+        ui::warn(&format!(
+            "could not restore FTS5 settings of '{table_name}' ({e}); re-run with -x"
+        ));
+    }
+    Ok(())
 }

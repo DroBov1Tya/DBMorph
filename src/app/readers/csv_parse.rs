@@ -9,6 +9,7 @@ use csv::ReaderBuilder;
 use encoding_rs::Encoding;
 use encoding_rs_io::DecodeReaderBytesBuilder;
 
+use crate::app::utils::progress::Progress;
 use crate::config;
 
 // Read adapter that repairs one physical line at a time: a line whose double
@@ -74,8 +75,9 @@ impl<R: Read> Read for RepairReader<R> {
     }
 }
 
-fn decoded_source(path: &Path, encoding: &str) -> Result<impl Read + use<>> {
+fn decoded_source(path: &Path, encoding: &str, progress: &Progress) -> Result<impl Read + use<>> {
     let file = File::open(path).with_context(|| format!("failed to open CSV {path:?}"))?;
+    let file = progress.reader(file);
     let rust_encoding = Encoding::for_label(encoding.as_bytes())
         .with_context(|| format!("unsupported encoding: {encoding}"))?;
     Ok(DecodeReaderBytesBuilder::new()
@@ -83,11 +85,11 @@ fn decoded_source(path: &Path, encoding: &str) -> Result<impl Read + use<>> {
         .build(BufReader::with_capacity(config::READ_BUFFER_BYTES, file)))
 }
 
-fn wrap_repair<R: Read + 'static>(
+fn wrap_repair<R: Read + Send + 'static>(
     reader: R,
     repair: bool,
     repairs: Arc<AtomicU64>,
-) -> Box<dyn Read> {
+) -> Box<dyn Read + Send> {
     if repair {
         Box::new(RepairReader::new(reader, repairs))
     } else {
@@ -116,10 +118,14 @@ pub async fn csv_row_reader<P: AsRef<Path>>(
     has_headers: bool,
     quoting: bool,
     repair: bool,
-) -> Result<(impl Iterator<Item = Result<Vec<String>>>, Arc<AtomicU64>)> {
+    progress: &Progress,
+) -> Result<(
+    impl Iterator<Item = Result<Vec<String>>> + use<P>,
+    Arc<AtomicU64>,
+)> {
     let repairs = Arc::new(AtomicU64::new(0));
     let source = wrap_repair(
-        decoded_source(csv_file.as_ref(), encoding)?,
+        decoded_source(csv_file.as_ref(), encoding, progress)?,
         repair && quoting,
         repairs.clone(),
     );
@@ -154,7 +160,7 @@ pub async fn csv_headers<P: AsRef<Path>>(
     repair: bool,
 ) -> Result<Vec<String>> {
     let source = wrap_repair(
-        decoded_source(csv_file.as_ref(), encoding)?,
+        decoded_source(csv_file.as_ref(), encoding, &Progress::unknown())?,
         repair && quoting,
         Arc::new(AtomicU64::new(0)),
     );

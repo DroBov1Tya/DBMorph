@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::thread::JoinHandle;
 
 use anyhow::{Result, bail};
 use futures::TryStreamExt;
@@ -106,7 +107,7 @@ pub fn stream_rows(
 ) -> impl Iterator<Item = Result<Vec<String>>> {
     let (tx, rx) = sync_channel::<Result<Vec<String>>>(config::SQLITE_STREAM_CHANNEL);
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -125,7 +126,10 @@ pub fn stream_rows(
         });
     });
 
-    RowStream { rx }
+    RowStream {
+        rx,
+        handle: Some(handle),
+    }
 }
 
 async fn pump(
@@ -159,12 +163,22 @@ async fn pump(
 
 struct RowStream {
     rx: Receiver<Result<Vec<String>>>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Iterator for RowStream {
     type Item = Result<Vec<String>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.rx.recv().ok()
+        match self.rx.recv() {
+            Ok(row) => Some(row),
+            // Closed channel: a panic in the reader must not pass for the end.
+            Err(_) => self
+                .handle
+                .take()?
+                .join()
+                .err()
+                .map(|_| Err(anyhow::anyhow!("SQLite reader thread panicked"))),
+        }
     }
 }

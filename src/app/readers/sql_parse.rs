@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use crate::app::utils::progress::{CountingReader, Progress};
 use crate::config;
 
 #[derive(Debug, Clone)]
@@ -19,17 +20,20 @@ enum Token {
 }
 
 struct Tokenizer {
-    reader: Option<BufReader<File>>,
+    reader: Option<BufReader<CountingReader<File>>>,
     pushed: Option<u8>,
     peeked: Option<Token>,
 }
 
 impl Tokenizer {
-    fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+    fn new<P: AsRef<Path>>(path: P, progress: &Progress) -> Result<Self> {
         let path = path.as_ref();
         let file = File::open(path).with_context(|| format!("failed to open SQL dump {path:?}"))?;
         Ok(Self {
-            reader: Some(BufReader::with_capacity(config::READ_BUFFER_BYTES, file)),
+            reader: Some(BufReader::with_capacity(
+                config::READ_BUFFER_BYTES,
+                progress.reader(file),
+            )),
             pushed: None,
             peeked: None,
         })
@@ -397,8 +401,9 @@ fn read_until_values(tok: &mut Tokenizer) -> Result<Option<Vec<String>>> {
 pub fn sql_open<P: AsRef<Path>>(
     path: P,
     wanted: Option<&str>,
+    progress: &Progress,
 ) -> Result<(String, Vec<String>, SqlRowIter)> {
-    let mut tok = Tokenizer::new(&path)?;
+    let mut tok = Tokenizer::new(&path, progress)?;
     let mut create_cols: HashMap<String, Vec<String>> = HashMap::new();
 
     while let Some(t) = tok.next_token()? {
