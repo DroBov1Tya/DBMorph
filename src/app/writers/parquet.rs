@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -15,7 +14,7 @@ use parquet::file::properties::WriterProperties;
 
 use crate::app::readers;
 use crate::app::transform;
-use crate::app::transform::infer::{self, ColType};
+use crate::app::transform::infer::{self, ColType, Mismatches};
 use crate::app::transform::rows::{RowGuard, guarded};
 use crate::app::utils::cli_prompt::process_and_pause;
 use crate::app::utils::ui;
@@ -82,7 +81,7 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     .await?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -90,18 +89,18 @@ async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         None,
     )
     .await?;
-    Ok(guard.finish() + readers::csv_parse::report_repairs(&repairs))
+    Ok(guard.finish() + mismatched + readers::csv_parse::report_repairs(&repairs))
 }
 
 async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     let headers = readers::json_parse::json_schema(&args.input_path)?;
-    let read_names = unique_column_names(&headers);
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
-    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), read_names)?;
+    // Rows are looked up by the original JSON keys, not the cleaned names.
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers)?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -109,7 +108,7 @@ async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         None,
     )
     .await?;
-    Ok(guard.finish())
+    Ok(guard.finish() + mismatched)
 }
 
 async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
@@ -121,7 +120,7 @@ async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     let raw = readers::xlsx_parse::xlsx_row_reader(path, has_headers)?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -129,7 +128,7 @@ async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         None,
     )
     .await?;
-    Ok(guard.finish())
+    Ok(guard.finish() + mismatched)
 }
 
 async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
@@ -143,12 +142,12 @@ async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         None
     };
 
-    let read_names = unique_column_names(&headers);
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
-    let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, read_names);
+    // Columns are selected by their real names, not the cleaned output names.
+    let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, headers);
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -156,7 +155,7 @@ async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         total,
     )
     .await?;
-    Ok(guard.finish())
+    Ok(guard.finish() + mismatched)
 }
 
 async fn parquet_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
@@ -188,7 +187,7 @@ async fn parquet_to_parquet_as_text(args: &AppArgs, out_path: &str) -> Result<u6
     let raw = readers::parquet_parse::parquet_row_reader(&args.input_path)?;
 
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -196,7 +195,7 @@ async fn parquet_to_parquet_as_text(args: &AppArgs, out_path: &str) -> Result<u6
         Some(total_rows as u64),
     )
     .await?;
-    Ok(guard.finish())
+    Ok(guard.finish() + mismatched)
 }
 
 async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
@@ -211,7 +210,7 @@ async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
 
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
     let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
-    write_parquet(
+    let mismatched = write_parquet(
         args,
         out_path,
         column_names,
@@ -219,7 +218,7 @@ async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
         None,
     )
     .await?;
-    Ok(guard.finish())
+    Ok(guard.finish() + mismatched)
 }
 
 async fn write_parquet(
@@ -228,7 +227,7 @@ async fn write_parquet(
     column_names: Vec<String>,
     rows: impl Iterator<Item = Result<Vec<String>>>,
     total_rows: Option<u64>,
-) -> Result<()> {
+) -> Result<u64> {
     let row_group_size = args.batch_size.max(1) as usize;
 
     let col_count = column_names.len();
@@ -238,7 +237,7 @@ async fn write_parquet(
     ui::field("columns", &col_count.to_string());
 
     let sample_target = if args.infer_types {
-        config::PARQUET_INFER_SAMPLE
+        args.infer_rows as usize
     } else {
         config::PREVIEW_ROWS
     };
@@ -259,7 +258,7 @@ async fn write_parquet(
 
     let types: Vec<ColType> = if args.infer_types {
         let t = infer::infer_types(&sample, col_count);
-        ui::field("inferred", &describe_types(&t));
+        ui::field("inferred", &infer::describe_types(&t));
         t
     } else {
         vec![ColType::Text; col_count]
@@ -288,6 +287,7 @@ async fn write_parquet(
         .collect();
     let mut in_batch = 0usize;
     let mut total = 0u64;
+    let mut mismatches = Mismatches::new(col_count);
 
     let push_row = |columns: &mut Vec<Vec<Option<String>>>, record: Vec<String>| {
         let mut fields = record.into_iter();
@@ -301,7 +301,14 @@ async fn write_parquet(
         in_batch += 1;
         total += 1;
         if in_batch >= row_group_size {
-            write_batch(&mut writer, &schema, &types, &mut columns)?;
+            write_batch(
+                &mut writer,
+                &schema,
+                &types,
+                &mut columns,
+                &mut mismatches,
+                args.strict,
+            )?;
             in_batch = 0;
             ui::progress("write", total, total_rows);
         }
@@ -312,19 +319,34 @@ async fn write_parquet(
         in_batch += 1;
         total += 1;
         if in_batch >= row_group_size {
-            write_batch(&mut writer, &schema, &types, &mut columns)?;
+            write_batch(
+                &mut writer,
+                &schema,
+                &types,
+                &mut columns,
+                &mut mismatches,
+                args.strict,
+            )?;
             in_batch = 0;
             ui::progress("write", total, total_rows);
         }
     }
 
     if in_batch > 0 {
-        write_batch(&mut writer, &schema, &types, &mut columns)?;
+        write_batch(
+            &mut writer,
+            &schema,
+            &types,
+            &mut columns,
+            &mut mismatches,
+            args.strict,
+        )?;
     }
 
     writer.close()?;
     ui::progress_done("wrote", total, &format!("{:.2?}", started.elapsed()));
-    Ok(())
+
+    Ok(mismatches.finish(&column_names, &types))
 }
 
 fn write_batch<W: Write + Send>(
@@ -332,32 +354,27 @@ fn write_batch<W: Write + Send>(
     schema: &Arc<Schema>,
     types: &[ColType],
     columns: &mut [Vec<Option<String>>],
+    mismatches: &mut Mismatches,
+    strict: bool,
 ) -> Result<()> {
-    let arrays: Vec<ArrayRef> = columns
-        .iter_mut()
-        .zip(types.iter())
-        .map(|(col, ty)| infer::build_array(*ty, std::mem::take(col)))
-        .collect();
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(columns.len());
+    for (col, (values, ty)) in columns.iter_mut().zip(types.iter()).enumerate() {
+        let (array, mismatched) = infer::build_array(*ty, std::mem::take(values));
+        if strict && mismatched > 0 {
+            bail!(
+                "column '{}': {mismatched} value(s) do not fit {} (inferred from the sample); \
+                 raise --infer-rows or drop --strict to store such values as NULL",
+                schema.field(col).name(),
+                ty.label()
+            );
+        }
+        mismatches.add(col, mismatched);
+        arrays.push(array);
+    }
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
     writer.write(&batch)?;
     Ok(())
-}
-
-fn describe_types(types: &[ColType]) -> String {
-    let mut n_int = 0;
-    let mut n_float = 0;
-    let mut n_bool = 0;
-    let mut n_text = 0;
-    for t in types {
-        match t {
-            ColType::Int => n_int += 1,
-            ColType::Float => n_float += 1,
-            ColType::Bool => n_bool += 1,
-            ColType::Text => n_text += 1,
-        }
-    }
-    format!("{n_int} int, {n_float} float, {n_bool} bool, {n_text} text")
 }
 
 fn verify_output(out_path: &str) -> Result<()> {
@@ -441,28 +458,4 @@ fn map_compression(c: Compression, level: Option<i32>) -> Result<ParquetCompress
         Compression::Lz4 => ParquetCompression::LZ4,
         Compression::None => ParquetCompression::UNCOMPRESSED,
     })
-}
-
-fn unique_column_names(headers: &[String]) -> Vec<String> {
-    let mut seen: HashMap<String, u32> = HashMap::new();
-    let mut names = Vec::with_capacity(headers.len());
-
-    for (i, header) in headers.iter().enumerate() {
-        let base = if header.trim().is_empty() {
-            format!("c{i}")
-        } else {
-            header.trim().to_string()
-        };
-
-        let counter = seen.entry(base.clone()).or_insert(0);
-        let name = if *counter == 0 {
-            base.clone()
-        } else {
-            format!("{base}_{counter}")
-        };
-        *counter += 1;
-        names.push(name);
-    }
-
-    names
 }

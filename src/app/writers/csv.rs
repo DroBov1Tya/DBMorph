@@ -65,9 +65,9 @@ async fn sqlite_to_csv(args: &AppArgs, out_path: &str) -> Result<u64> {
         None
     };
 
-    let read_names = transform::columns::unique_column_names(&auto);
     let headers = transform::columns::resolve_output_names(&auto, args.columns.as_deref())?;
-    let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, read_names);
+    // Columns are selected by their real names, not the cleaned output names.
+    let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, auto);
     let guard = RowGuard::new(headers.len(), args.max_field, args.strict, &args.trim);
     write_all(
         out_path,
@@ -82,11 +82,11 @@ async fn sqlite_to_csv(args: &AppArgs, out_path: &str) -> Result<u64> {
 
 async fn json_to_csv(args: &AppArgs, out_path: &str) -> Result<u64> {
     let auto = readers::json_parse::json_schema(&args.input_path)?;
-    let read_names = transform::columns::unique_column_names(&auto);
     let headers = transform::columns::resolve_output_names(&auto, args.columns.as_deref())?;
     ui::field("columns", &headers.len().to_string());
 
-    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), read_names)?;
+    // Rows are looked up by the original JSON keys, not the cleaned names.
+    let raw = readers::json_parse::json_row_reader(args.input_path.clone(), auto)?;
     let guard = RowGuard::new(headers.len(), args.max_field, args.strict, &args.trim);
     write_all(
         out_path,

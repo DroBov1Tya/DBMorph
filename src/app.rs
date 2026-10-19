@@ -27,6 +27,9 @@ pub async fn run() -> Result<u64> {
     if args.database_type == "parquet" {
         ui::field("codec", &format!("{:?}", args.compression).to_lowercase());
     }
+    if args.database_type == "sqlite" {
+        ui::field("mode", &format!("{:?}", args.sqlite_mode).to_lowercase());
+    }
 
     let skipped = match args.database_type.as_str() {
         "sqlite" => writers::sqlite::sqlite_processing(&args).await?,

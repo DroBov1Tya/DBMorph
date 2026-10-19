@@ -10,7 +10,7 @@ async fn main() -> ExitCode {
         Ok(0) => ExitCode::SUCCESS,
         Ok(skipped) => {
             app::utils::ui::warn(&format!(
-                "completed with {skipped} malformed row(s) - see warnings above"
+                "completed with {skipped} repaired row(s) or value(s) - see warnings above"
             ));
             ExitCode::from(2)
         }

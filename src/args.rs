@@ -106,6 +106,27 @@ pub struct AppArgs {
     #[arg(long = "infer-types")]
     pub infer_types: bool,
 
+    /// SQLite table layout: fts (FTS5, all text, MATCH search) or typed
+    /// (STRICT table, INTEGER/REAL/TEXT columns inferred from a sample)
+    #[arg(
+        long = "sqlite-mode",
+        value_name = "MODE",
+        value_enum,
+        default_value_t = SqliteMode::Fts
+    )]
+    pub sqlite_mode: SqliteMode,
+
+    /// Rows sampled to infer column types (--infer-types, --sqlite-mode typed).
+    /// The sample is held in memory; a value that does not fit the inferred
+    /// type later on is stored as NULL and reported (an error with --strict).
+    #[arg(
+        long = "infer-rows",
+        value_name = "ROWS",
+        default_value_t = crate::config::INFER_SAMPLE_ROWS,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub infer_rows: u32,
+
     /// Disable csv/txt quote handling: every line break ends a row
     /// (use for naive dumps where an unclosed quote would merge rows)
     #[arg(long = "no-quote")]
@@ -136,6 +157,12 @@ pub enum Compression {
     Brotli,
     Lz4,
     None,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SqliteMode {
+    Fts,
+    Typed,
 }
 
 fn parse_delimiter(raw: &str) -> Result<u8, String> {

@@ -27,15 +27,15 @@ pub const PARQUET_READ_BATCH: usize = 8_192;
 // Bounded buffer between the SQLite reader task and the writer iterator.
 pub const SQLITE_STREAM_CHANNEL: usize = 8_192;
 
-// Rows sampled to infer column types when --infer-types is set.
-pub const PARQUET_INFER_SAMPLE: usize = 8_192;
+// Default rows sampled to infer column types (--infer-rows).
+pub const INFER_SAMPLE_ROWS: u32 = 8_192;
 
 // A tuple is a runaway parse when it has more fields than the larger of
 // (expected fields times FACTOR) and MIN.
 pub const SQL_TUPLE_FIELD_FACTOR: usize = 16;
 pub const SQL_TUPLE_FIELD_MIN: usize = 4_096;
 
-// Malformed-row warnings printed before the rest are suppressed.
+// Malformed-row and type-mismatch warnings printed before the rest are suppressed.
 pub const SKIP_WARN_LIMIT: u64 = 10;
 
 pub const PREVIEW_ROWS: usize = 5;
