@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -9,6 +10,7 @@ use crate::app::transform;
 use crate::app::transform::infer::{self, ColType};
 use crate::app::transform::rows::{RowGuard, guarded, pipelined};
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::paths::ensure_distinct_paths;
 use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::{AppArgs, SqliteMode};
@@ -20,27 +22,21 @@ use requests::TableSpec;
 
 pub async fn sqlite_processing(args: &AppArgs) -> Result<u64> {
     let db_path = format!("sqlite://{}.db", args.output_path);
+    ensure_distinct_paths(
+        std::path::Path::new(&args.input_path),
+        std::path::Path::new(&format!("{}.db", args.output_path)),
+    )?;
 
     ui::section("sqlite");
     if args.infer_types && args.sqlite_mode == SqliteMode::Fts {
         ui::warn("--infer-types has no effect on FTS5 tables; use --sqlite-mode typed");
     }
-    ui::step(&format!("connecting -> {db_path}"));
-
-    let connect_opts = SqliteConnectOptions::from_str(&db_path)?.create_if_missing(true);
-    let mut conn = SqliteConnection::connect_with(&connect_opts).await?;
-    ui::ok("connected");
-
-    if args.drop_existing {
-        requests::delete_exists_table(&mut conn, &args.table_name).await?;
-    }
-
     let skipped = match args.input_file_type.as_str() {
-        "csv" | "txt" => ingest_csv(&mut conn, args).await?,
-        "parquet" => ingest_parquet(&mut conn, args).await?,
-        "json" | "jsonl" | "ndjson" => ingest_json(&mut conn, args).await?,
-        "xlsx" | "xls" | "ods" => ingest_xlsx(&mut conn, args).await?,
-        "sql" | "dump" => ingest_sql(&mut conn, args).await?,
+        "csv" | "txt" => ingest_csv(&db_path, args).await?,
+        "parquet" => ingest_parquet(&db_path, args).await?,
+        "json" | "jsonl" | "ndjson" => ingest_json(&db_path, args).await?,
+        "xlsx" | "xls" | "ods" => ingest_xlsx(&db_path, args).await?,
+        "sql" | "dump" => ingest_sql(&db_path, args).await?,
         other => {
             ui::warn(&format!("Unsupported input file type: {other}"));
             0
@@ -50,14 +46,14 @@ pub async fn sqlite_processing(args: &AppArgs) -> Result<u64> {
     Ok(skipped)
 }
 
-async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+async fn ingest_csv(db_path: &str, args: &AppArgs) -> Result<u64> {
     let progress = Progress::file(&args.input_path);
     let source = readers::csv_parse::open_csv(args, &progress).await?;
     let names = transform::columns::resolve_output_names(&source.headers, args.columns.as_deref())?;
 
     let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
-        conn,
+        db_path,
         args,
         &args.table_name,
         &names,
@@ -68,7 +64,7 @@ async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
     Ok(guard.finish() + mismatched + source.stats.finish())
 }
 
-async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+async fn ingest_json(db_path: &str, args: &AppArgs) -> Result<u64> {
     let headers = readers::json_parse::json_schema(&args.input_path)?;
     ui::field("columns", &headers.len().to_string());
 
@@ -80,7 +76,7 @@ async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
 
     let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
-        conn,
+        db_path,
         args,
         &args.table_name,
         &names,
@@ -91,7 +87,7 @@ async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
     Ok(guard.finish() + mismatched)
 }
 
-async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+async fn ingest_xlsx(db_path: &str, args: &AppArgs) -> Result<u64> {
     let path = std::path::Path::new(&args.input_path);
     let has_headers = !args.no_header;
     let headers = readers::xlsx_parse::xlsx_headers(path, has_headers)?;
@@ -103,7 +99,7 @@ async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
 
     let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
-        conn,
+        db_path,
         args,
         &args.table_name,
         &names,
@@ -114,7 +110,7 @@ async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
     Ok(guard.finish() + mismatched)
 }
 
-async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+async fn ingest_parquet(db_path: &str, args: &AppArgs) -> Result<u64> {
     let (names, total_rows) = readers::parquet_parse::schema_columns(&args.input_path)?;
     ui::field("columns", &names.len().to_string());
 
@@ -124,7 +120,7 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
 
     let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
-        conn,
+        db_path,
         args,
         &args.table_name,
         &names,
@@ -135,7 +131,7 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
     Ok(guard.finish() + mismatched)
 }
 
-async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
+async fn ingest_sql(db_path: &str, args: &AppArgs) -> Result<u64> {
     let wanted = if args.table_name == "main" {
         None
     } else {
@@ -158,7 +154,7 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
 
     let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
-        conn,
+        db_path,
         args,
         &dest_table,
         &names,
@@ -174,13 +170,38 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
 // only after the preview is confirmed, because a typed layout needs the
 // sample to pick column types. Returns cells that did not fit their type.
 async fn load_table(
-    conn: &mut SqliteConnection,
+    db_path: &str,
+    args: &AppArgs,
+    table_name: &str,
+    columns: &[String],
+    rows: impl Iterator<Item = Result<Vec<String>>>,
+    progress: &Progress,
+) -> Result<u64> {
+    load_table_with_preview(
+        db_path,
+        args,
+        table_name,
+        columns,
+        rows,
+        progress,
+        process_and_pause,
+    )
+    .await
+}
+
+async fn load_table_with_preview<P, Fut>(
+    db_path: &str,
     args: &AppArgs,
     table_name: &str,
     columns: &[String],
     mut rows: impl Iterator<Item = Result<Vec<String>>>,
     progress: &Progress,
-) -> Result<u64> {
+    preview_fn: P,
+) -> Result<u64>
+where
+    P: FnOnce(Vec<Vec<String>>) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
     let columns = &transform::columns::unique_column_names_nocase(columns);
 
     let sample_target = match args.sqlite_mode {
@@ -198,7 +219,16 @@ async fn load_table(
 
     if !sample.is_empty() {
         let preview: Vec<Vec<String>> = sample.iter().take(config::PREVIEW_ROWS).cloned().collect();
-        process_and_pause(preview).await?;
+        preview_fn(preview).await?;
+    }
+
+    // Do not create or touch the destination until the preview is accepted.
+    ui::step(&format!("connecting -> {db_path}"));
+    let connect_opts = SqliteConnectOptions::from_str(db_path)?.create_if_missing(true);
+    let mut conn = SqliteConnection::connect_with(&connect_opts).await?;
+    ui::ok("connected");
+    if args.drop_existing {
+        requests::delete_exists_table(&mut conn, table_name).await?;
     }
 
     let types = match args.sqlite_mode {
@@ -216,18 +246,18 @@ async fn load_table(
         types: &types,
     };
     let fts5_bulk = match args.sqlite_mode {
-        SqliteMode::Fts => requests::create_fts5_table(conn, &spec).await?,
+        SqliteMode::Fts => requests::create_fts5_table(&mut conn, &spec).await?,
         SqliteMode::Typed => {
-            requests::create_typed_table(conn, &spec).await?;
+            requests::create_typed_table(&mut conn, &spec).await?;
             false
         }
     };
     if fts5_bulk {
-        requests::fts5_bulk_load_begin(conn, table_name).await?;
+        requests::fts5_bulk_load_begin(&mut conn, table_name).await?;
     }
 
     let loaded = requests::init_insert_process(
-        conn,
+        &mut conn,
         &spec,
         args.batch_size,
         args.strict,
@@ -237,7 +267,7 @@ async fn load_table(
     .await;
 
     if fts5_bulk {
-        finish_fts5_bulk_load(conn, table_name, loaded.is_ok()).await?;
+        finish_fts5_bulk_load(&mut conn, table_name, loaded.is_ok()).await?;
     }
     loaded
 }
@@ -263,4 +293,45 @@ async fn finish_fts5_bulk_load(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn declining_preview_does_not_create_sqlite_destination() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output = std::env::temp_dir().join(format!(
+            "dbm-preview-cancel-{}-{unique}",
+            std::process::id()
+        ));
+        let db_path = format!("sqlite://{}.db", output.display());
+        let target = std::path::PathBuf::from(format!("{}.db", output.display()));
+        assert!(!target.exists());
+
+        let args = AppArgs::try_parse_from(["DBMorph", "-i", "input.csv", "-o", "unused"]).unwrap();
+        let rows = vec![Ok(vec!["row".to_owned()])].into_iter();
+        let result = load_table_with_preview(
+            &db_path,
+            &args,
+            "data",
+            &["column".to_owned()],
+            rows,
+            &Progress::unknown(),
+            |_| async { anyhow::bail!("preview declined") },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            !target.exists(),
+            "declining preview must leave no target file"
+        );
+    }
 }

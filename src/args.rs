@@ -241,3 +241,18 @@ pub fn parse_args() -> AppArgs {
         .collect();
     args
 }
+
+pub fn parse_from<I, T>(argv: I) -> Result<AppArgs, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let matches = AppArgs::command().try_get_matches_from(argv)?;
+    let mut args = AppArgs::from_arg_matches(&matches)?;
+    args.explicit = matches
+        .ids()
+        .filter(|id| matches.value_source(id.as_str()) == Some(ValueSource::CommandLine))
+        .map(|id| id.to_string())
+        .collect();
+    Ok(args)
+}

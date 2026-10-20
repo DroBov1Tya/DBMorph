@@ -7,6 +7,9 @@ use crate::app::utils::ui;
 use crate::config;
 
 pub async fn process_and_pause(preview: Vec<Vec<String>>) -> Result<()> {
+    if crate::tui::active() {
+        return crate::tui::show_preview(preview).await;
+    }
     ui::preview_table(&preview, config::PREVIEW_ROWS, config::PREVIEW_COLS);
 
     loop {
@@ -25,7 +28,7 @@ pub async fn process_and_pause(preview: Vec<Vec<String>>) -> Result<()> {
             "y" | "" => return Ok(()),
             "n" => {
                 ui::warn("Execution terminated by user");
-                std::process::exit(0);
+                anyhow::bail!("conversion cancelled at preview")
             }
             _ => ui::error("Invalid input, try again"),
         }

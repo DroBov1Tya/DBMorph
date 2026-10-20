@@ -9,6 +9,7 @@ use crate::app::readers;
 use crate::app::transform;
 use crate::app::transform::rows::{RowGuard, guarded, pipelined};
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::paths::ensure_distinct_paths;
 use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::AppArgs;
@@ -20,6 +21,11 @@ pub async fn csv_processing(args: &AppArgs) -> Result<u64> {
     } else {
         format!("{}.csv", args.output_path)
     };
+
+    ensure_distinct_paths(
+        std::path::Path::new(&args.input_path),
+        std::path::Path::new(&out_path),
+    )?;
 
     ui::section("csv");
 
@@ -172,6 +178,42 @@ async fn write_all(
     rows: impl Iterator<Item = Result<Vec<String>>>,
     progress: &Progress,
 ) -> Result<()> {
+    write_all_with_preview(
+        out_path,
+        headers,
+        delimiter,
+        rows,
+        progress,
+        process_and_pause,
+    )
+    .await
+}
+
+async fn write_all_with_preview<P, Fut>(
+    out_path: &str,
+    headers: Vec<String>,
+    delimiter: u8,
+    mut rows: impl Iterator<Item = Result<Vec<String>>>,
+    progress: &Progress,
+    preview_fn: P,
+) -> Result<()>
+where
+    P: FnOnce(Vec<Vec<String>>) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let mut sample = Vec::with_capacity(config::PREVIEW_ROWS);
+    for row in rows.by_ref() {
+        sample.push(row?);
+        if sample.len() >= config::PREVIEW_ROWS {
+            break;
+        }
+    }
+    if !sample.is_empty() {
+        preview_fn(sample.clone()).await?;
+    }
+
+    // Opening with File::create truncates an existing file; wait until after
+    // preview confirmation so cancellation has no destination side effect.
     let file = BufWriter::with_capacity(config::WRITE_BUFFER_BYTES, File::create(out_path)?);
     let mut writer = WriterBuilder::new().delimiter(delimiter).from_writer(file);
 
@@ -183,20 +225,8 @@ async fn write_all(
     let started = Instant::now();
     let progress = &progress.restarted();
     let mut total = 0u64;
-    let mut preview_shown = false;
-    let mut preview_buf: Vec<Vec<String>> = Vec::new();
-
-    for row_result in rows {
+    for row_result in sample.into_iter().map(Ok).chain(rows) {
         let record = row_result?;
-
-        if !preview_shown {
-            preview_buf.push(record.clone());
-            if preview_buf.len() >= config::PREVIEW_ROWS {
-                process_and_pause(std::mem::take(&mut preview_buf)).await?;
-                preview_shown = true;
-            }
-        }
-
         writer.write_record(&record)?;
         total += 1;
 
@@ -205,11 +235,79 @@ async fn write_all(
         }
     }
 
-    if !preview_shown && !preview_buf.is_empty() {
-        process_and_pause(std::mem::take(&mut preview_buf)).await?;
-    }
-
     writer.flush()?;
     ui::progress_done("wrote", total, &format!("{:.2?}", started.elapsed()));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_path(name: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "dbm-csv-{name}-{}-{unique}.csv",
+            std::process::id()
+        ))
+    }
+
+    async fn declined_preview(path: &std::path::Path) -> Result<()> {
+        write_all_with_preview(
+            path.to_str().unwrap(),
+            vec!["column".to_owned()],
+            b',',
+            vec![Ok(vec!["value".to_owned()])].into_iter(),
+            &Progress::unknown(),
+            |_| async { anyhow::bail!("preview declined") },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn declining_preview_leaves_destination_absent() {
+        let path = test_path("absent");
+        assert!(!path.exists());
+        assert!(declined_preview(&path).await.is_err());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn declining_preview_preserves_existing_destination() {
+        let path = test_path("existing");
+        let original = b"keep this output intact\n";
+        std::fs::write(&path, original).unwrap();
+        assert!(declined_preview(&path).await.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn same_input_and_output_path_is_rejected_without_truncation() {
+        let input = test_path("same");
+        let original = b"name\nAda\n";
+        std::fs::write(&input, original).unwrap();
+        let output_base = input.with_extension("");
+        let args = AppArgs::try_parse_from([
+            "DBMorph",
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output_base.to_str().unwrap(),
+            "-f",
+            "csv",
+            "-t",
+            "csv",
+        ])
+        .unwrap();
+
+        assert!(csv_processing(&args).await.is_err());
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        std::fs::remove_file(input).unwrap();
+    }
 }

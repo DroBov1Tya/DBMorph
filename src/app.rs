@@ -13,10 +13,15 @@ use crate::args;
 use crate::config;
 
 pub async fn run() -> Result<u64> {
-    let start = Instant::now();
     utils::logger::logger();
+    if std::env::args_os().len() == 1 {
+        return crate::tui::run().await;
+    }
+    run_pipeline(args::parse_args()).await
+}
 
-    let mut args = args::parse_args();
+pub async fn run_pipeline(mut args: crate::args::AppArgs) -> Result<u64> {
+    let start = Instant::now();
 
     ui::banner(config::APP_VERSION);
 
@@ -45,6 +50,7 @@ pub async fn run() -> Result<u64> {
         }
         return Ok(0);
     }
+
     if args.database_type == "parquet" {
         ui::field("codec", &format!("{:?}", args.compression).to_lowercase());
     }

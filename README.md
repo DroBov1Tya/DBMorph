@@ -109,6 +109,20 @@ The binary is installed as 'DBMorph' into '~/.cargo/bin'.
 
 ## Quick start
 
+Run `DBMorph` without arguments to open the interactive terminal UI. It stays
+open through setup, optional CSV/TXT diagnostics and safe-fix choice, row
+preview and confirmation, live conversion progress, and a completion or error
+summary. The setup covers paths, formats, delimiter, table, encoding, batch
+size, SQLite typed mode, Parquet type inference, strict mode, replacing a
+table, and header handling. Arrow keys select or change fields; Enter edits,
+cycles, or confirms; Space toggles options; `s` starts after setup. On the
+doctor screen, `a` applies safe fixes and `c` continues without them. Press
+`q` or Escape to cancel setup or diagnostics, or to decline the preview.
+Conversion currently cannot be cancelled after writing starts: interrupting
+a streaming write could leave a partial target. Preview cancellation exits as
+cancelled (non-zero); CSV and SQLite destinations are opened only after
+preview confirmation.
+
 ```sh
 # CSV -> SQLite (default source and target)
 DBMorph -i users.csv -o users

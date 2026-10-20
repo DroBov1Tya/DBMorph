@@ -9,6 +9,10 @@ use crate::app::utils::progress::Progress;
 const LABEL_WIDTH: usize = 13;
 
 pub fn banner(version: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("DBMorph · data pipeline v{version}"));
+        return;
+    }
     let art = r#"
     ██████╗ ██████╗ ███╗   ███╗ ██████╗ ██████╗ ██████╗ ██╗  ██╗
     ██╔══██╗██╔══██╗████╗ ████║██╔═══██╗██╔══██╗██╔══██╗██║  ██║
@@ -27,11 +31,19 @@ pub fn banner(version: &str) {
 }
 
 pub fn section(title: &str) {
+    if crate::tui::active() {
+        crate::tui::log(title.to_uppercase());
+        return;
+    }
     println!("\n  {}", title.to_uppercase().bright_white().bold());
     println!("  {}", "─".repeat(title.len().max(8)).bright_black());
 }
 
 pub fn field(label: &str, value: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("{label}: {value}"));
+        return;
+    }
     println!(
         "  {:<LABEL_WIDTH$} {}",
         label.bright_black(),
@@ -40,26 +52,58 @@ pub fn field(label: &str, value: &str) {
 }
 
 pub fn step(msg: &str) {
+    if crate::tui::active() {
+        crate::tui::log(msg.to_string());
+        return;
+    }
     println!("  {} {}", "▸".cyan().bold(), msg.bright_white());
 }
 
 pub fn ok(msg: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("OK: {msg}"));
+        return;
+    }
     println!("  {} {}", "✓".green().bold(), msg.bright_white());
 }
 
 pub fn warn(msg: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("Warning: {msg}"));
+        return;
+    }
     println!("  {} {}", "!".yellow().bold(), msg.yellow());
 }
 
 pub fn error(msg: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("Error: {msg}"));
+        return;
+    }
     eprintln!("  {} {}", "✗".red().bold(), msg.red());
 }
 
 pub fn info(msg: &str) {
+    if crate::tui::active() {
+        crate::tui::log(msg.to_string());
+        return;
+    }
     println!("  {} {}", "·".bright_black(), msg.bright_black());
 }
 
 pub fn progress(label: &str, rows: u64, progress: &Progress) {
+    if crate::tui::active() {
+        let percent = progress
+            .fraction(rows)
+            .map(|f| format!(" · {:.1}%", f * 100.0))
+            .unwrap_or_default();
+        let eta = progress
+            .eta(rows)
+            .map(|d| format!(" · ETA {}", fmt_duration(d)))
+            .unwrap_or_default();
+        crate::tui::progress_message(format!("{label}: {rows} rows{percent}{eta}"));
+        return;
+    }
     let rate = format!("{}/s", fmt_int(progress.rows_per_sec(rows)));
     let body = match progress.fraction(rows) {
         Some(fraction) => {
@@ -105,6 +149,10 @@ fn fmt_duration(d: Duration) -> String {
 }
 
 pub fn progress_done(label: &str, rows: u64, elapsed: &str) {
+    if crate::tui::active() {
+        crate::tui::progress_message(format!("{label}: {rows} rows in {elapsed}"));
+        return;
+    }
     print!("\r{:<90}\r", " ");
     println!(
         "  {} {} {} rows in {}",
@@ -116,6 +164,10 @@ pub fn progress_done(label: &str, rows: u64, elapsed: &str) {
 }
 
 pub fn preview_table(records: &[Vec<String>], max_rows: usize, max_cols: usize) {
+    if crate::tui::active() {
+        crate::tui::log(format!("Preview: {} rows", records.len().min(max_rows)));
+        return;
+    }
     if records.is_empty() {
         warn("No records to display");
         return;
@@ -150,6 +202,10 @@ pub fn preview_table(records: &[Vec<String>], max_rows: usize, max_cols: usize) 
 }
 
 pub fn total_time(elapsed: &str) {
+    if crate::tui::active() {
+        crate::tui::log(format!("Total time: {elapsed}"));
+        return;
+    }
     println!(
         "\n  {} {} {}",
         "◆".cyan().bold(),

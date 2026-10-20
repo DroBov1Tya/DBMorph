@@ -17,6 +17,7 @@ use crate::app::transform;
 use crate::app::transform::infer::{self, ColType, Mismatches};
 use crate::app::transform::rows::{RowGuard, guarded, pipelined};
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::paths::ensure_distinct_paths;
 use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::{AppArgs, Compression};
@@ -397,19 +398,6 @@ fn pseudo_random_mid(total_rows: usize) -> i64 {
         .map(|d| d.as_nanos() as usize)
         .unwrap_or(0);
     (now % total_rows) as i64
-}
-
-// Creating the output file empties it first, so writing onto the input
-// would destroy the input before a single row is read.
-fn ensure_distinct_paths(input: &Path, output: &Path) -> Result<()> {
-    // An output that does not exist yet cannot be the input.
-    let (Ok(input), Ok(output)) = (input.canonicalize(), output.canonicalize()) else {
-        return Ok(());
-    };
-    if input == output {
-        bail!("output {output:?} is the input file; choose a different -o path");
-    }
-    Ok(())
 }
 
 fn codec_label(args: &AppArgs) -> String {
