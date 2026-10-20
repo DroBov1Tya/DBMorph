@@ -21,3 +21,10 @@ tabled = "0.19.0"
 tokio = { version = "1.45.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
+
+# One codegen unit with fat LTO lets rustc inline across crates (csv, sqlx,
+# arrow) on the per-cell hot path; strip keeps the shipped binary small.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

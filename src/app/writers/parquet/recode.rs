@@ -23,6 +23,7 @@ use parquet::file::writer::SerializedFileWriter;
 use crate::app::readers;
 use crate::app::transform;
 use crate::app::utils::cli_prompt::process_and_pause;
+use crate::app::utils::progress::Progress;
 use crate::app::utils::ui;
 use crate::args::AppArgs;
 use crate::config;
@@ -52,12 +53,13 @@ pub(super) async fn run(args: &AppArgs, out_path: &str) -> Result<()> {
     ));
 
     let started = Instant::now();
+    let progress = Progress::rows(total_rows as u64);
     let written = recode(
         Path::new(&args.input_path),
         Path::new(out_path),
         compression,
         rename.as_deref(),
-        |rows| ui::progress("write", rows, Some(total_rows as u64)),
+        |rows| ui::progress("write", rows, &progress),
     )?;
     ui::progress_done("wrote", written, &format!("{:.2?}", started.elapsed()));
     Ok(())

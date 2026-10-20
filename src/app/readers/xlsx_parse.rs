@@ -59,7 +59,7 @@ pub fn xlsx_headers(path: &Path, has_headers: bool) -> Result<Vec<String>> {
 pub fn xlsx_row_reader(
     path: &Path,
     has_headers: bool,
-) -> Result<impl Iterator<Item = Result<Vec<String>>>> {
+) -> Result<impl Iterator<Item = Result<Vec<String>>> + use<>> {
     let rows = load_rows(path)?;
     let mut iter = rows.into_iter();
     if has_headers {

@@ -8,7 +8,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-orange)](https://doc.rust-lang.org/edition-guide/rust-2024/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE.md)
-[![SQLite](https://img.shields.io/badge/SQLite-FTS5-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/fts5.html)
+[![SQLite](https://img.shields.io/badge/SQLite-FTS5%20%7C%20STRICT-003B57?logo=sqlite&logoColor=white)](https://www.sqlite.org/fts5.html)
 [![Parquet](https://img.shields.io/badge/Apache%20Parquet-zstd%20%7C%20snappy%20%7C%20gzip%20%7C%20brotli%20%7C%20lz4-50ABF1)](https://parquet.apache.org)
 <br>
 [![Last commit](https://img.shields.io/github/last-commit/DroBov1Tya/DBMorph)](https://github.com/DroBov1Tya/DBMorph/commits)
@@ -52,8 +52,11 @@ DBMorph -i leak.csv -o leak -f csv -t sqlite -d ';'
   hard error.
 - **SQL dump parser.** Reads 'CREATE TABLE' and 'INSERT ... VALUES' from
   'mysqldump' or 'pg_dump --inserts' output without a database server.
-- **SQLite with full-text search.** Output tables are FTS5 virtual tables
-  ('unicode61' tokenizer), ready for 'MATCH' queries.
+- **SQLite: full-text search or typed tables.** By default output tables are
+  FTS5 virtual tables ('unicode61' tokenizer), ready for 'MATCH' queries.
+  With '--sqlite-mode typed' they are 'STRICT' tables with 'INTEGER', 'REAL'
+  and 'TEXT' columns inferred from the data, faster to load and smaller on
+  disk than FTS5.
 - **Parquet done right.** Choice of codec and level, optional type inference
   ('int', 'float', 'bool'), lossless re-compression of existing Parquet files
   and a read-back integrity check after every write.
@@ -110,6 +113,9 @@ The binary is installed as 'DBMorph' into '~/.cargo/bin'.
 # CSV -> SQLite (default source and target)
 DBMorph -i users.csv -o users
 
+# CSV -> SQLite STRICT table with INTEGER / REAL / TEXT columns
+DBMorph -i users.csv -o users --sqlite-mode typed
+
 # CSV with ';' delimiter -> Parquet with native column types
 DBMorph -i sales.csv -o sales -t parquet -d ';' --infer-types
 
@@ -157,6 +163,39 @@ or are generated as 'c0, c1, ...' when neither is present.
 DBMorph -i leak.csv -o leak -n records
 sqlite3 leak.db "SELECT * FROM records WHERE records MATCH 'john AND smith' LIMIT 20;"
 ```
+
+</details>
+
+<details>
+<summary><b>Load into SQLite with typed columns</b></summary>
+
+```sh
+DBMorph -i sales.csv -o sales -n sales --sqlite-mode typed
+sqlite3 sales.db "SELECT region, sum(amount) FROM sales GROUP BY region;"
+```
+
+The first 8192 rows are sampled ('--infer-rows' changes that) and each column
+gets the narrowest type every non-empty sampled value fits:
+
+| Values in the sample                 | Column type | Stored as                       |
+| ------------------------------------ | ----------- | ------------------------------- |
+| '42', '-7'                           | 'INTEGER'   | 64-bit integer                  |
+| '1.5', '6.02e23', mixed with integers | 'REAL'      | 64-bit float                    |
+| 'true' / 'false', any case           | 'INTEGER'   | '1' / '0'                       |
+| anything else, or no values at all   | 'TEXT'      | the value as is                 |
+
+- Empty cells in 'INTEGER' and 'REAL' columns become 'NULL'; in 'TEXT'
+  columns they stay empty strings.
+- Values that would change when read back as numbers stay text: leading zeros
+  ('007', zip codes, phone numbers), '+5', '1_000', '.5', 'inf', 'NaN',
+  integers too large for 64 bits, and decimals a 64-bit float cannot hold
+  exactly (more than 15 significant digits, underflow such as '1e-400').
+- Column names that differ only in letter case ('Id', 'id') get a suffix
+  ('id_1'), because SQLite treats them as the same column.
+- A value further down the file that does not fit its column type is stored
+  as 'NULL', counted per column and reported; the exit code is then '2'.
+  With '--strict' the run stops at the first such value instead. Values are
+  never printed in these messages.
 
 </details>
 
@@ -231,6 +270,39 @@ Encoding names follow the [WHATWG Encoding Standard](https://encoding.spec.whatw
 
 </details>
 
+<details>
+<summary><b>Diagnose and repair a damaged CSV or text file</b></summary>
+
+```sh
+DBMorph -i dump.csv -o cleaned -t csv --doctor
+```
+
+`--doctor` checks up to the first 4 MiB of a CSV/TXT input, reports likely
+encoding and row-layout problems, then exits without converting the file. It
+selects unambiguous fixes by default and prints a complete conversion command
+you can review and run. `--no-auto-fix` leaves every fix for that command to
+you. The check is sample-based; it does not prove that the rest of a large file
+is clean.
+
+The conversion options below can also be supplied directly:
+
+- `--join-lines` rejoins short rows when consecutive lines add up to the
+  header's field count.
+- `--realign` restores extra fields only when one text column is an unambiguous
+  fit against the other columns' inferred types.
+- `--trailing-delimiter` drops an empty final field left by a delimiter at the
+  end of a row.
+- `--fallback-encoding <ENC>` decodes lines that are invalid UTF-8 with a
+  single-byte encoding. The option is used only when the primary encoding is
+  UTF-8.
+- `--fix-mojibake <ENC>` attempts to reverse text that was UTF-8 decoded as the
+  named single-byte encoding.
+
+Rows or values changed by these conversion options are reported and result in
+exit code `2`.
+
+</details>
+
 ## CLI reference
 
 ```text
@@ -257,6 +329,13 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 | '--no-quote'           | off     | Ignore quotes; every line break ends a row                         |
 | '--no-repair'          | off     | Keep RFC multi-line quoted fields instead of closing quotes per line |
 | '--columns &lt;A,B,C&gt;'    |         | Override output column names; count must match the source         |
+| '--doctor'             | off     | Diagnose a CSV/TXT sample, print a conversion command, then exit   |
+| '--no-auto-fix'        | off     | With '--doctor', list safe fixes without selecting them automatically |
+| '--join-lines'         | off     | Rejoin short rows when lines add up to the expected field count   |
+| '--realign'            | off     | Rejoin extra fields when inferred column types give one clear fit |
+| '--trailing-delimiter' | off     | Drop an empty final field caused by a delimiter at row end        |
+| '--fallback-encoding &lt;ENC&gt;' |         | Decode invalid UTF-8 lines with this single-byte encoding       |
+| '--fix-mojibake &lt;ENC&gt;'      |         | Reverse text misdecoded as this single-byte encoding           |
 
 ### Cleaning
 
@@ -273,6 +352,8 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 | '-c, --compression &lt;C&gt;'    | 'zstd'  | Parquet codec: 'zstd', 'snappy', 'gzip', 'brotli', 'lz4', 'none' |
 | '-l, --level &lt;N&gt;'          | codec   | zstd '1-22', gzip '0-9', brotli '0-11'                        |
 | '--infer-types'            | off     | Parquet columns typed as int/float/bool instead of all text   |
+| '--sqlite-mode &lt;MODE&gt;'     | 'fts'   | SQLite table layout: 'fts' (FTS5, all text) or 'typed' (STRICT) |
+| '--infer-rows &lt;ROWS&gt;'      | '8192'  | Rows sampled for '--infer-types' and '--sqlite-mode typed'    |
 | '-b, --batch-size &lt;ROWS&gt;'  | '50000' | Rows buffered per write or insert batch                       |
 | '-x, --drop-existing'      | off     | Drop the target SQLite table before inserting                 |
 | '--count'                  | off     | Count source rows first for a progress percentage (SQLite source) |
@@ -281,7 +362,7 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 
 | Code | Meaning                                                         |
 | :--: | --------------------------------------------------------------- |
-| '0'  | Success, every row was clean                                    |
+| '0'  | Command completed; '--doctor' exits successfully after its check |
 | '1'  | Error, nothing or only part of the data was written             |
 | '2'  | Success, but some rows were repaired, realigned or dropped      |
 
@@ -289,30 +370,44 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 
 ```mermaid
 flowchart LR
-    A["Source file"] --> B["Reader<br/>decode + parse"]
-    B --> C["Row guard<br/>pad / truncate / trim"]
-    C --> D["Batcher<br/>-b rows"]
-    D --> E1["SQLite FTS5"]
+    subgraph T1 ["reader thread"]
+        B["Reader<br/>decode + parse"] --> C["Row guard<br/>pad / truncate / trim"]
+    end
+    A["Source file"] --> B
+    C -- "bounded batches" --> D["Batcher<br/>-b rows"]
+    D --> E1["SQLite<br/>FTS5 or STRICT"]
     D --> E2["Parquet"]
     D --> E3["CSV"]
     E2 --> V["Read-back check"]
 ```
 
 1. **Read.** Each reader yields rows lazily. CSV goes through a 1 MiB buffer
-   and the quote-repair adapter; JSON arrays are split by a byte scanner that
-   holds a single element at a time; SQL dumps are tokenized in one pass.
+   and the quote-repair adapter; JSON arrays are split by a byte scanner
+   instead of being parsed whole; SQL dumps are tokenized in one pass.
 2. **Guard.** Every row is checked against the expected column count. Short
    rows are padded with empty values, long rows are cut, runaway rows (more
-   than 16x the expected width, at least 4096 fields) are dropped. The first 10 problems are printed, the rest are
-   counted.
+   than 16x the expected width, at least 4096 fields) are dropped. The first
+   10 problems are printed, the rest are counted. Reading, decoding and the
+   guard run on their own thread and hand rows to the writer in batches of
+   4096 rows or 8 MiB of text, whichever comes first (at most 4 batches in
+   flight), so parsing overlaps with writing.
 3. **Write.** Rows are batched and written:
    - **SQLite** uses multi-row 'INSERT' statements split under the bound
      parameter limit, inside one exclusive connection with journaling off.
+     The table is created after the preview is confirmed; in typed mode its
+     column types are inferred from the sampled rows, and every cell is bound
+     as an integer, float or text value. A new FTS5 table is loaded with
+     segment merging deferred, then optimized into a single segment and its
+     FTS5 settings restored, also when the load fails.
    - **Parquet** builds Arrow record batches; with '--infer-types' the column
-     types are inferred from the first 8192 rows.
+     types are inferred from the first 8192 rows ('--infer-rows').
    - **CSV** is written as UTF-8 through a buffered writer.
 4. **Verify.** Parquet output is reopened and the first, a middle and the last
    rows are read back.
+
+Progress shows a percentage, rows per second and an ETA. For CSV, SQL dump
+and JSON sources it follows the bytes read from the file; for Parquet and a
+counted SQLite table ('--count') it follows rows.
 
 ## Limitations
 
@@ -321,11 +416,17 @@ flowchart LR
   crash, power loss) the output '.db' file can be left corrupted. The input
   file is only read and is never at risk. Because the output file may already
   hold other tables, write to a fresh file, not to a database you care about.
-- **All SQLite columns are text, on purpose.** Values are moved as they are,
-  with no type guessing that could reject or silently alter dirty data, and
-  FTS5 tables have no column types anyway. SQLite cannot change a column type
-  in place, but typed columns are one query away, see
+- **FTS5 columns are text.** FTS5 tables have no column types, so the
+  default mode moves values exactly as they are. Use '--sqlite-mode typed'
+  for numeric columns, or convert after import, see
   [typed columns after import](#typed-columns-after-import).
+- **Typed mode infers types from a sample.** Rows after the sample are not
+  seen until they are inserted, so a late non-numeric value in a numeric
+  column becomes 'NULL' (reported, exit code '2'). Raise '--infer-rows' for
+  data that changes shape deep into the file; the sample is held in memory.
+  There are no date or time types: such values are stored as 'TEXT'.
+  'REAL' is a 64-bit float: '12.30' is stored as '12.3', and a column with
+  longer decimals stays 'TEXT' rather than being rounded.
 - **JSON and spreadsheets are in development (beta).** Spreadsheets are read
   from the first sheet only, and the sheet is loaded into memory. JSON is read
   twice: the first pass collects the union of keys to build the schema; nested
@@ -337,8 +438,9 @@ flowchart LR
 
 ### Typed columns after import
 
-Copy the FTS5 table into a regular table with the types you need. The full-text
-table stays available for search:
+'--sqlite-mode typed' covers most cases at conversion time. To keep both
+full-text search and typed columns, copy the FTS5 table into a regular table
+with the types you need:
 
 ```sql
 CREATE TABLE users_typed (
@@ -353,6 +455,8 @@ FROM users;
 ```
 
 For Parquet output the same is done at conversion time with '--infer-types'.
+Both use the same inference rules described in
+[typed columns](#recipes).
 
 ## Roadmap
 

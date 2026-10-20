@@ -1,11 +1,13 @@
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, sync_channel};
+use std::thread::JoinHandle;
 
 use anyhow::{Result, bail};
 use futures::TryStreamExt;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
 
+use crate::app::transform::columns::quote_identifier;
 use crate::config;
 
 async fn connect(db_file: &str) -> Result<SqliteConnection> {
@@ -61,7 +63,7 @@ async fn resolve_table(conn: &mut SqliteConnection, requested: &str) -> Result<S
 }
 
 async fn column_names(conn: &mut SqliteConnection, table: &str) -> Result<Vec<String>> {
-    let rows = sqlx::query(&format!("PRAGMA table_info(\"{table}\")"))
+    let rows = sqlx::query(&format!("PRAGMA table_info({})", quote_identifier(table)))
         .fetch_all(&mut *conn)
         .await?;
 
@@ -80,9 +82,10 @@ async fn column_names(conn: &mut SqliteConnection, table: &str) -> Result<Vec<St
 // count), so it is opt-in and never on the streaming start path.
 pub async fn count_rows(db_file: &str, table: &str) -> Result<u64> {
     let mut conn = connect(db_file).await?;
-    let count: (i64,) = sqlx::query_as(&format!("SELECT count(*) FROM \"{table}\""))
-        .fetch_one(&mut conn)
-        .await?;
+    let count: (i64,) =
+        sqlx::query_as(&format!("SELECT count(*) FROM {}", quote_identifier(table)))
+            .fetch_one(&mut conn)
+            .await?;
     Ok(count.0.max(0) as u64)
 }
 
@@ -104,7 +107,7 @@ pub fn stream_rows(
 ) -> impl Iterator<Item = Result<Vec<String>>> {
     let (tx, rx) = sync_channel::<Result<Vec<String>>>(config::SQLITE_STREAM_CHANNEL);
 
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -123,7 +126,10 @@ pub fn stream_rows(
         });
     });
 
-    RowStream { rx }
+    RowStream {
+        rx,
+        handle: Some(handle),
+    }
 }
 
 async fn pump(
@@ -136,10 +142,10 @@ async fn pump(
 
     let select_list = columns
         .iter()
-        .map(|c| format!("CAST(\"{c}\" AS TEXT)"))
+        .map(|c| format!("CAST({} AS TEXT)", quote_identifier(c)))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {select_list} FROM \"{table}\"");
+    let sql = format!("SELECT {select_list} FROM {}", quote_identifier(table));
 
     let mut stream = sqlx::query(&sql).fetch(&mut conn);
     while let Some(row) = stream.try_next().await? {
@@ -157,12 +163,22 @@ async fn pump(
 
 struct RowStream {
     rx: Receiver<Result<Vec<String>>>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Iterator for RowStream {
     type Item = Result<Vec<String>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.rx.recv().ok()
+        match self.rx.recv() {
+            Ok(row) => Some(row),
+            // Closed channel: a panic in the reader must not pass for the end.
+            Err(_) => self
+                .handle
+                .take()?
+                .join()
+                .err()
+                .map(|_| Err(anyhow::anyhow!("SQLite reader thread panicked"))),
+        }
     }
 }

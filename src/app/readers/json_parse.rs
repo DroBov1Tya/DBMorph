@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde_json::{Deserializer, Value};
 
+use crate::app::utils::progress::{CountingReader, Progress};
 use crate::config;
 
 enum JsonShape {
@@ -41,14 +42,14 @@ fn detect_shape<P: AsRef<Path>>(path: P) -> Result<JsonShape> {
 // A byte scanner tracks brace/bracket depth and string state, emitting one
 // element at a time so peak memory stays at a single element plus the buffer.
 struct ArrayReader {
-    reader: BufReader<File>,
+    reader: BufReader<CountingReader<File>>,
     started: bool,
     first: bool,
     done: bool,
 }
 
 impl ArrayReader {
-    fn new(reader: BufReader<File>) -> Self {
+    fn new(reader: BufReader<CountingReader<File>>) -> Self {
         Self {
             reader,
             started: false,
@@ -264,10 +265,13 @@ impl Iterator for ArrayReader {
     }
 }
 
-fn iter_values<P: AsRef<Path>>(path: P) -> Result<Box<dyn Iterator<Item = Result<Value>>>> {
+fn iter_values<P: AsRef<Path>>(
+    path: P,
+    progress: &Progress,
+) -> Result<Box<dyn Iterator<Item = Result<Value>> + Send>> {
     let path = path.as_ref();
     let file = File::open(path).with_context(|| format!("failed to open JSON {path:?}"))?;
-    let reader = BufReader::with_capacity(config::READ_BUFFER_BYTES, file);
+    let reader = BufReader::with_capacity(config::READ_BUFFER_BYTES, progress.reader(file));
 
     match detect_shape(path)? {
         JsonShape::Array => Ok(Box::new(ArrayReader::new(reader))),
@@ -284,7 +288,7 @@ pub fn json_schema<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
     let mut columns: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    for value in iter_values(path)? {
+    for value in iter_values(path, &Progress::unknown())? {
         if let Value::Object(map) = value? {
             for key in map.keys() {
                 if seen.insert(key.clone()) {
@@ -305,8 +309,9 @@ pub fn json_schema<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
 pub fn json_row_reader<P: AsRef<Path>>(
     path: P,
     columns: Vec<String>,
-) -> Result<impl Iterator<Item = Result<Vec<String>>>> {
-    let values = iter_values(path)?;
+    progress: &Progress,
+) -> Result<impl Iterator<Item = Result<Vec<String>>> + use<P>> {
+    let values = iter_values(path, progress)?;
 
     let iter = values.map(move |value| {
         value.and_then(|value| match value {
