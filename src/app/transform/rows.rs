@@ -5,7 +5,11 @@ use std::thread::JoinHandle;
 
 use anyhow::{Result, anyhow, bail};
 
+use encoding_rs::Encoding;
+
+use crate::app::transform::encoding;
 use crate::app::utils::ui;
+use crate::args::AppArgs;
 use crate::config;
 
 // Row hygiene shared by every reader: pads short rows, drops runaway-wide
@@ -16,6 +20,8 @@ pub struct RowGuard {
     max_field: usize,
     strict: bool,
     trim: Arc<[char]>,
+    mojibake: Option<&'static Encoding>,
+    unmojibaked: Arc<AtomicU64>,
     skipped: Arc<AtomicU64>,
     warned: Arc<AtomicU64>,
 }
@@ -32,9 +38,18 @@ impl RowGuard {
             max_field,
             strict,
             trim,
+            mojibake: None,
+            unmojibaked: Arc::new(AtomicU64::new(0)),
             skipped: Arc::new(AtomicU64::new(0)),
             warned: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    // The guard as configured by the command line.
+    pub fn for_args(expected: usize, args: &AppArgs) -> Self {
+        let mut guard = Self::new(expected, args.max_field, args.strict, &args.trim);
+        guard.mojibake = args.fix_mojibake.as_deref().and_then(encoding::by_label);
+        guard
     }
 
     pub fn skipped(&self) -> u64 {
@@ -75,6 +90,15 @@ impl RowGuard {
             }
         }
 
+        if let Some(wrong) = self.mojibake {
+            for cell in row.iter_mut() {
+                if let Some(fixed) = encoding::unmojibake(cell, wrong) {
+                    *cell = fixed;
+                    self.unmojibaked.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
         if !self.trim.is_empty() {
             let pat: &[char] = &self.trim;
             for cell in row.iter_mut() {
@@ -107,13 +131,18 @@ impl RowGuard {
         }
     }
 
-    // Prints a closing summary and returns the skip count.
+    // Prints a closing summary and returns how many rows or cells were
+    // changed, for the exit code.
     pub fn finish(&self) -> u64 {
         let n = self.skipped();
         if n > 0 {
             ui::warn(&format!("{n} malformed row(s) realigned or dropped"));
         }
-        n
+        let fixed = self.unmojibaked.load(Ordering::Relaxed);
+        if fixed > 0 {
+            ui::warn(&format!("repaired mojibake in {fixed} cell(s)"));
+        }
+        n + fixed
     }
 }
 

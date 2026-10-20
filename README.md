@@ -270,6 +270,39 @@ Encoding names follow the [WHATWG Encoding Standard](https://encoding.spec.whatw
 
 </details>
 
+<details>
+<summary><b>Diagnose and repair a damaged CSV or text file</b></summary>
+
+```sh
+DBMorph -i dump.csv -o cleaned -t csv --doctor
+```
+
+`--doctor` checks up to the first 4 MiB of a CSV/TXT input, reports likely
+encoding and row-layout problems, then exits without converting the file. It
+selects unambiguous fixes by default and prints a complete conversion command
+you can review and run. `--no-auto-fix` leaves every fix for that command to
+you. The check is sample-based; it does not prove that the rest of a large file
+is clean.
+
+The conversion options below can also be supplied directly:
+
+- `--join-lines` rejoins short rows when consecutive lines add up to the
+  header's field count.
+- `--realign` restores extra fields only when one text column is an unambiguous
+  fit against the other columns' inferred types.
+- `--trailing-delimiter` drops an empty final field left by a delimiter at the
+  end of a row.
+- `--fallback-encoding <ENC>` decodes lines that are invalid UTF-8 with a
+  single-byte encoding. The option is used only when the primary encoding is
+  UTF-8.
+- `--fix-mojibake <ENC>` attempts to reverse text that was UTF-8 decoded as the
+  named single-byte encoding.
+
+Rows or values changed by these conversion options are reported and result in
+exit code `2`.
+
+</details>
+
 ## CLI reference
 
 ```text
@@ -296,6 +329,13 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 | '--no-quote'           | off     | Ignore quotes; every line break ends a row                         |
 | '--no-repair'          | off     | Keep RFC multi-line quoted fields instead of closing quotes per line |
 | '--columns &lt;A,B,C&gt;'    |         | Override output column names; count must match the source         |
+| '--doctor'             | off     | Diagnose a CSV/TXT sample, print a conversion command, then exit   |
+| '--no-auto-fix'        | off     | With '--doctor', list safe fixes without selecting them automatically |
+| '--join-lines'         | off     | Rejoin short rows when lines add up to the expected field count   |
+| '--realign'            | off     | Rejoin extra fields when inferred column types give one clear fit |
+| '--trailing-delimiter' | off     | Drop an empty final field caused by a delimiter at row end        |
+| '--fallback-encoding &lt;ENC&gt;' |         | Decode invalid UTF-8 lines with this single-byte encoding       |
+| '--fix-mojibake &lt;ENC&gt;'      |         | Reverse text misdecoded as this single-byte encoding           |
 
 ### Cleaning
 
@@ -322,7 +362,7 @@ DBMorph [OPTIONS] --input <FILE> --output <FILE>
 
 | Code | Meaning                                                         |
 | :--: | --------------------------------------------------------------- |
-| '0'  | Success, every row was clean                                    |
+| '0'  | Command completed; '--doctor' exits successfully after its check |
 | '1'  | Error, nothing or only part of the data was written             |
 | '2'  | Success, but some rows were repaired, realigned or dropped      |
 

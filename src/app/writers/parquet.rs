@@ -51,48 +51,21 @@ pub async fn parquet_processing(args: &AppArgs) -> Result<u64> {
 }
 
 async fn csv_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
-    let encoding = match &args.encoding {
-        Some(enc) => enc.clone(),
-        None => transform::encoding::detect_encoding(&args.input_path)?,
-    };
-    ui::field("charset", &encoding);
-
-    let has_headers = !args.no_header;
-    let quoting = !args.no_quote;
-    let repair = !args.no_repair;
-    let headers = readers::csv_parse::csv_headers(
-        &args.input_path,
-        args.delimiter,
-        &encoding,
-        has_headers,
-        quoting,
-        repair,
-    )
-    .await?;
-    let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
-
     let progress = Progress::file(&args.input_path);
-    let (raw, repairs) = readers::csv_parse::csv_row_reader(
-        args.input_path.clone(),
-        args.delimiter,
-        &encoding,
-        has_headers,
-        quoting,
-        repair,
-        &progress,
-    )
-    .await?;
+    let source = readers::csv_parse::open_csv(args, &progress).await?;
+    let column_names =
+        transform::columns::resolve_output_names(&source.headers, args.columns.as_deref())?;
 
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,
         column_names,
-        pipelined(guarded(raw, guard.clone()))?,
+        pipelined(guarded(source.rows, guard.clone()))?,
         &progress,
     )
     .await?;
-    Ok(guard.finish() + mismatched + readers::csv_parse::report_repairs(&repairs))
+    Ok(guard.finish() + mismatched + source.stats.finish())
 }
 
 async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
@@ -103,7 +76,7 @@ async fn json_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     // Rows are looked up by the original JSON keys, not the cleaned names.
     let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers, &progress)?;
 
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,
@@ -123,7 +96,7 @@ async fn xlsx_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
 
     let raw = readers::xlsx_parse::xlsx_row_reader(path, has_headers)?;
 
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,
@@ -150,7 +123,7 @@ async fn sqlite_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     // Columns are selected by their real names, not the cleaned output names.
     let raw = readers::sqlite_parse::stream_rows(args.input_path.clone(), table, headers);
 
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,
@@ -190,7 +163,7 @@ async fn parquet_to_parquet_as_text(args: &AppArgs, out_path: &str) -> Result<u6
 
     let raw = readers::parquet_parse::parquet_row_reader(std::path::Path::new(&args.input_path))?;
 
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,
@@ -215,7 +188,7 @@ async fn sql_to_parquet(args: &AppArgs, out_path: &str) -> Result<u64> {
     ui::field("source table", &source_table);
 
     let column_names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
-    let guard = RowGuard::new(column_names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(column_names.len(), args);
     let mismatched = write_parquet(
         args,
         out_path,

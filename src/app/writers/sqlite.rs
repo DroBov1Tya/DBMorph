@@ -51,50 +51,21 @@ pub async fn sqlite_processing(args: &AppArgs) -> Result<u64> {
 }
 
 async fn ingest_csv(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
-    let encoding = match &args.encoding {
-        Some(enc) => enc.clone(),
-        None => transform::encoding::detect_encoding(&args.input_path)?,
-    };
-    ui::field("charset", &encoding);
-
-    let has_headers = !args.no_header;
-    let quoting = !args.no_quote;
-    let repair = !args.no_repair;
-    let headers = readers::csv_parse::csv_headers(
-        &args.input_path,
-        args.delimiter,
-        &encoding,
-        has_headers,
-        quoting,
-        repair,
-    )
-    .await?;
-
-    let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
-
     let progress = Progress::file(&args.input_path);
-    let (raw, repairs) = readers::csv_parse::csv_row_reader(
-        args.input_path.clone(),
-        args.delimiter,
-        &encoding,
-        has_headers,
-        quoting,
-        repair,
-        &progress,
-    )
-    .await?;
+    let source = readers::csv_parse::open_csv(args, &progress).await?;
+    let names = transform::columns::resolve_output_names(&source.headers, args.columns.as_deref())?;
 
-    let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
         conn,
         args,
         &args.table_name,
         &names,
-        pipelined(guarded(raw, guard.clone()))?,
+        pipelined(guarded(source.rows, guard.clone()))?,
         &progress,
     )
     .await?;
-    Ok(guard.finish() + mismatched + readers::csv_parse::report_repairs(&repairs))
+    Ok(guard.finish() + mismatched + source.stats.finish())
 }
 
 async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> {
@@ -107,7 +78,7 @@ async fn ingest_json(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
     // Rows are looked up by the original JSON keys, not the cleaned names.
     let raw = readers::json_parse::json_row_reader(args.input_path.clone(), headers, &progress)?;
 
-    let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
         conn,
         args,
@@ -130,7 +101,7 @@ async fn ingest_xlsx(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64>
 
     let raw = readers::xlsx_parse::xlsx_row_reader(path, has_headers)?;
 
-    let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
         conn,
         args,
@@ -151,7 +122,7 @@ async fn ingest_parquet(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u
 
     let raw = readers::parquet_parse::parquet_row_reader(std::path::Path::new(&args.input_path))?;
 
-    let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
         conn,
         args,
@@ -185,7 +156,7 @@ async fn ingest_sql(conn: &mut SqliteConnection, args: &AppArgs) -> Result<u64> 
 
     let names = transform::columns::resolve_output_names(&headers, args.columns.as_deref())?;
 
-    let guard = RowGuard::new(names.len(), args.max_field, args.strict, &args.trim);
+    let guard = RowGuard::for_args(names.len(), args);
     let mismatched = load_table(
         conn,
         args,

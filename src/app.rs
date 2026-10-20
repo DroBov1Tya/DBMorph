@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 
+pub mod doctor;
 pub mod readers;
 pub mod transform;
 pub mod utils;
@@ -15,7 +16,7 @@ pub async fn run() -> Result<u64> {
     let start = Instant::now();
     utils::logger::logger();
 
-    let args = args::parse_args();
+    let mut args = args::parse_args();
 
     ui::banner(config::APP_VERSION);
 
@@ -24,6 +25,26 @@ pub async fn run() -> Result<u64> {
     ui::field("output", &args.output_path);
     ui::field("source", &args.input_file_type);
     ui::field("target", &args.database_type);
+
+    if args.doctor {
+        if !doctor::applies(&args) {
+            anyhow::bail!("--doctor is available only for csv/txt input");
+        }
+        let report = doctor::examine(&args)?;
+        let applied = if args.no_auto_fix {
+            Vec::new()
+        } else {
+            report.apply_safe(&mut args)
+        };
+        report.print(&applied);
+        let suggested = report.suggested(&applied);
+        let mut command_fixes = applied;
+        command_fixes.extend(suggested);
+        if !command_fixes.is_empty() {
+            ui::field("suggested command", &doctor::command_with(&command_fixes));
+        }
+        return Ok(0);
+    }
     if args.database_type == "parquet" {
         ui::field("codec", &format!("{:?}", args.compression).to_lowercase());
     }

@@ -52,5 +52,18 @@ pub const SQL_TUPLE_FIELD_MIN: usize = 4_096;
 // Malformed-row and type-mismatch warnings printed before the rest are suppressed.
 pub const SKIP_WARN_LIMIT: u64 = 10;
 
+// Doctor: how much of the input start is examined. Bytes for the encoding
+// checks, lines for the layout and damage checks.
+pub const DOCTOR_SAMPLE_BYTES: usize = 4 << 20;
+pub const DOCTOR_SAMPLE_LINES: usize = 5_000;
+
+// A broken row is rejoined from at most this many following lines.
+pub const MAX_JOIN_LINES: usize = 8;
+
+// Realign: rows with up to this many extra fields are considered, and column
+// types are learned from this many leading rows of the right width.
+pub const MAX_REALIGN_EXTRA: usize = 3;
+pub const REALIGN_PROFILE_ROWS: usize = 2_048;
+
 pub const PREVIEW_ROWS: usize = 5;
 pub const PREVIEW_COLS: usize = 5;
